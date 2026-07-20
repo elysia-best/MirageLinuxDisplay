@@ -20,6 +20,11 @@ The implementation is protocol-first. See:
 - `docs/desktop-adapters.md`
 - `protocol/mirage_display_v1.xml`
 
+The reusable broker core is exposed as `mirage_display_broker.h`. It owns a
+`0600` Unix socket, validates same-UID peers, matches one producer and one DE
+consumer per stable output identity, negotiates exact format/modifier tuples,
+and forwards DMA-BUF/synchronization descriptors without copying pixels.
+
 ## Build
 
 ```sh

@@ -8,6 +8,10 @@ set(CMAKE_AUTOMOC ON)
 
 find_package(Qt6 6.5 REQUIRED COMPONENTS Gui Qml Quick)
 
+if(COMMAND qt_policy)
+    qt_policy(SET QTP0001 NEW)
+endif()
+
 set(MIRAGE_DISPLAY_QML_URI "Mirage.Display"
     CACHE STRING "QML module URI for the Mirage display item")
 string(REPLACE "." "/" MIRAGE_DISPLAY_QML_PATH "${MIRAGE_DISPLAY_QML_URI}")

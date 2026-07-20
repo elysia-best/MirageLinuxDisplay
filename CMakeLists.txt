@@ -17,6 +17,7 @@ set(MIRAGE_DISPLAY_SOURCES
     src/protocol.c
     src/display.c
     src/producer.c
+    src/broker.c
     src/sync.c)
 
 add_library(mirage_display SHARED ${MIRAGE_DISPLAY_SOURCES})
@@ -44,6 +45,7 @@ install(TARGETS mirage_display mirage_display_static
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
 install(FILES include/mirage_display.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(FILES include/mirage_display_producer.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(FILES include/mirage_display_broker.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(EXPORT MirageDisplayTargets
     FILE MirageDisplayTargets.cmake
     NAMESPACE Mirage::
@@ -140,6 +142,13 @@ if(MIRAGE_DISPLAY_BUILD_TESTS)
     target_include_directories(test_session PRIVATE src)
     target_compile_options(test_session PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME session COMMAND test_session)
+
+    add_executable(test_broker tests/test_broker.c)
+    target_link_libraries(test_broker PRIVATE mirage_display_static Threads::Threads)
+    target_include_directories(test_broker PRIVATE src)
+    target_compile_options(test_broker PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME broker COMMAND test_broker)
+    set_tests_properties(broker PROPERTIES SKIP_RETURN_CODE 77)
 
     add_executable(test_producer tests/test_producer.c)
     target_link_libraries(test_producer PRIVATE mirage_display_static Threads::Threads)

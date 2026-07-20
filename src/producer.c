@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +19,24 @@
 #include <unistd.h>
 
 #define MD_PRODUCER_OUTBOX_LIMIT 64u
+
+static int fill_unix_address(const char* path, struct sockaddr_un* address,
+                             socklen_t* address_length) {
+    if (path == NULL || address == NULL || address_length == NULL) return MD_ERR_INVALID;
+    size_t length = strlen(path);
+    memset(address, 0, sizeof(*address));
+    address->sun_family = AF_UNIX;
+    if (path[0] == '@') {
+        if (length <= 1u || length >= sizeof(address->sun_path)) return MD_ERR_INVALID;
+        memcpy(address->sun_path + 1, path + 1, length - 1u);
+        *address_length = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + length);
+    } else {
+        if (length == 0 || length >= sizeof(address->sun_path)) return MD_ERR_INVALID;
+        memcpy(address->sun_path, path, length + 1u);
+        *address_length = (socklen_t)sizeof(*address);
+    }
+    return MD_OK;
+}
 
 typedef struct md_producer_out_message {
     struct md_producer_out_message* next;
@@ -278,18 +297,20 @@ int md_producer_begin_connect(md_producer_t* producer, const char* socket_path,
     }
     int rc = copy_connect_args(producer, socket_path, client_name, client_version, info);
     if (rc != MD_OK) return rc;
-    if (strlen(socket_path) >= sizeof(((struct sockaddr_un*)0)->sun_path)) return MD_ERR_INVALID;
     int fd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (fd < 0) return MD_ERR_IO;
     struct sockaddr_un address;
-    memset(&address, 0, sizeof(address));
-    address.sun_family = AF_UNIX;
-    memcpy(address.sun_path, socket_path, strlen(socket_path) + 1u);
+    socklen_t address_length;
+    rc = fill_unix_address(socket_path, &address, &address_length);
+    if (rc != MD_OK) {
+        close(fd);
+        return rc;
+    }
     producer->fd = fd;
     producer->connection_state = MD_CONNECTION_CONNECTING;
     producer->handshake_state = MD_HANDSHAKE_CONNECTING;
     producer->disconnected_notified = false;
-    if (connect(fd, (struct sockaddr*)&address, sizeof(address)) == 0) {
+    if (connect(fd, (struct sockaddr*)&address, address_length) == 0) {
         return start_connected_fd(producer, fd);
     }
     if (errno != EINPROGRESS && errno != EAGAIN && errno != EALREADY) {

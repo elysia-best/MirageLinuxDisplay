@@ -113,6 +113,8 @@ wire contract.
 
 ### MirageQt DisplayBroker
 
+- Embed the `md_broker_t` core from `include/mirage_display_broker.h` or wrap
+  its dispatch loop from MirageQt.
 - Own the well-known display socket with mode `0600`.
 - Validate peers with `SO_PEERCRED`.
 - Track consumer, producer and output lifecycles independently.
@@ -120,6 +122,14 @@ wire contract.
 - Negotiate format/modifier intersections and forward only descriptors.
 - Preserve consumers while renderer processes restart.
 - Re-send active pool and configuration after consumer reconnect.
+
+Current implementation status:
+
+- Broker listener, same-UID validation, one producer/consumer route per stable
+  output, exact format/modifier negotiation and FD forwarding: implemented.
+- Abstract `@name` AF_UNIX addresses are supported for socket activation and
+  tests; production uses the documented filesystem socket path.
+- Consumer/producer restart persistence and multi-consumer fan-out: pending.
 
 ### SceneRenderer Producer
 

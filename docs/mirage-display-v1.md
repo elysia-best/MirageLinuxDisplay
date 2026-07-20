@@ -16,6 +16,10 @@ packet with `SCM_RIGHTS`.
 
 The broker rejects peers whose `SO_PEERCRED.uid` differs from its own uid.
 
+Implementations may use a Linux abstract socket name beginning with `@` for
+socket activation or tests. The production discovery path remains the
+filesystem socket above.
+
 ## Packet Header
 
 All fields are little-endian. The header is exactly 24 bytes.

@@ -57,8 +57,14 @@ if(MIRAGE_DISPLAY_WITH_VULKAN)
     if(NOT Vulkan_FOUND)
         message(FATAL_ERROR "MIRAGE_DISPLAY_WITH_VULKAN=ON but Vulkan was not found")
     endif()
-    add_library(mirage_display_vulkan SHARED src/vulkan_import.c)
-    add_library(mirage_display_vulkan_static STATIC src/vulkan_import.c)
+    add_library(mirage_display_vulkan SHARED
+        src/vulkan_import.c
+        src/vulkan_blit.c
+        src/vulkan_export.c)
+    add_library(mirage_display_vulkan_static STATIC
+        src/vulkan_import.c
+        src/vulkan_blit.c
+        src/vulkan_export.c)
     set_target_properties(mirage_display_vulkan PROPERTIES
         VERSION ${PROJECT_VERSION}
         SOVERSION ${PROJECT_VERSION_MAJOR})
@@ -78,7 +84,11 @@ if(MIRAGE_DISPLAY_WITH_VULKAN)
         EXPORT MirageDisplayTargets
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
-    install(FILES include/mirage_display_vulkan.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    install(FILES
+        include/mirage_display_vulkan.h
+        include/mirage_display_vulkan_blit.h
+        include/mirage_display_vulkan_export.h
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 endif()
 
 find_package(PkgConfig QUIET)
@@ -158,6 +168,7 @@ if(MIRAGE_DISPLAY_BUILD_TESTS)
 
     add_executable(test_sync tests/test_sync.c)
     target_link_libraries(test_sync PRIVATE mirage_display_static)
+    target_include_directories(test_sync PRIVATE src)
     target_compile_options(test_sync PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME sync COMMAND test_sync)
 
@@ -196,4 +207,28 @@ if(MIRAGE_DISPLAY_PLUGIN_QML)
     add_subdirectory(plugins/qml)
     install(DIRECTORY extensions/kde/package/
         DESTINATION ${CMAKE_INSTALL_DATADIR}/plasma/wallpapers/org.mirage.wallpaper)
+
+    if(MIRAGE_DISPLAY_QML_URI MATCHES "Embed")
+        install(DIRECTORY extensions/kde/package/
+            DESTINATION org.mirage.wallpaper
+            COMPONENT kde_extension
+            EXCLUDE_FROM_ALL
+            PATTERN "MirageSurface.qml" EXCLUDE
+            PATTERN "MirageSurfaceEmbed.qml" EXCLUDE)
+        install(FILES extensions/kde/package/contents/ui/MirageSurfaceEmbed.qml
+            DESTINATION org.mirage.wallpaper/contents/ui
+            RENAME MirageSurface.qml
+            COMPONENT kde_extension
+            EXCLUDE_FROM_ALL)
+        list(APPEND CPACK_COMPONENTS_ALL kde_extension)
+        set(CPACK_ARCHIVE_KDE_EXTENSION_FILE_NAME
+            "mirage-kde-${PROJECT_VERSION}-${CMAKE_SYSTEM_PROCESSOR}-embed")
+    endif()
 endif()
+
+set(CPACK_GENERATOR "ZIP")
+set(CPACK_PACKAGE_NAME "mirage-linux-display")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_ARCHIVE_COMPONENT_INSTALL ON)
+set(CPACK_PACKAGING_INSTALL_PREFIX "")
+include(CPack)

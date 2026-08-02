@@ -4,6 +4,7 @@
 
 #include "codec.h"
 #include "protocol.h"
+#include "sync_fanout.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -44,6 +45,7 @@ typedef struct md_broker_message {
 
 typedef struct md_broker_peer md_broker_peer_t;
 typedef struct md_broker_route md_broker_route_t;
+typedef struct md_broker_fanout md_broker_fanout_t;
 
 struct md_broker_peer {
     int fd;
@@ -57,6 +59,9 @@ struct md_broker_peer {
     char* client_name;
     char* client_version;
     md_broker_route_t* route;
+    bool display_pool_sent;
+    bool display_unbind_pending;
+    uint64_t display_unbind_generation;
 
     char* output_stable_id;
     char* output_name;
@@ -78,6 +83,8 @@ struct md_broker_route {
     uint64_t output_id;
     char* stable_id;
     md_broker_peer_t* display;
+    md_broker_peer_t* displays[MD_BROKER_MAX_PEERS];
+    uint32_t display_count;
     md_broker_peer_t* producer;
     md_format_cap_t selected_format;
     bool format_selected;
@@ -85,8 +92,19 @@ struct md_broker_route {
     bool pool_active;
     bool retire_pending;
     bool unbind_pending;
+    uint64_t pending_unbind_generation;
     uint64_t pool_generation;
     md_buffer_pool_t pool;
+    bool config_active;
+    md_display_config_t config;
+    bool unbind_retiring_old_producer;
+};
+
+struct md_broker_fanout {
+    md_broker_fanout_t* next;
+    md_sync_fanout_t* sync;
+    uint32_t display_count;
+    md_broker_peer_t* displays[MD_BROKER_MAX_PEERS];
 };
 
 struct md_broker {
@@ -103,6 +121,7 @@ struct md_broker {
     md_broker_peer_t* peers[MD_BROKER_MAX_PEERS];
     md_broker_route_t* routes;
     uint32_t route_count;
+    md_broker_fanout_t* fanouts;
 };
 
 static char* duplicate_string(const char* value) {
@@ -120,6 +139,44 @@ static void close_fds(int* fds, size_t count) {
         if (fds[i] >= 0) close(fds[i]);
         fds[i] = -1;
     }
+}
+
+static void poll_fanouts(md_broker_t* broker) {
+    if (broker == NULL) return;
+    md_broker_fanout_t** link = &broker->fanouts;
+    while (*link != NULL) {
+        md_broker_fanout_t* fanout = *link;
+        int rc = md_sync_fanout_poll(fanout->sync);
+        if (rc == 0) {
+            link = &fanout->next;
+            continue;
+        }
+        *link = fanout->next;
+        md_sync_fanout_free(fanout->sync);
+        free(fanout);
+    }
+}
+
+static void abandon_peer_fanouts(md_broker_t* broker, md_broker_peer_t* peer) {
+    if (broker == NULL || peer == NULL) return;
+    for (md_broker_fanout_t* fanout = broker->fanouts; fanout != NULL;
+         fanout = fanout->next) {
+        for (uint32_t i = 0; i < fanout->display_count; ++i) {
+            if (fanout->displays[i] == peer) md_sync_fanout_abandon(fanout->sync, i);
+        }
+    }
+}
+
+static void free_fanouts(md_broker_t* broker) {
+    if (broker == NULL) return;
+    md_broker_fanout_t* fanout = broker->fanouts;
+    while (fanout != NULL) {
+        md_broker_fanout_t* next = fanout->next;
+        md_sync_fanout_free(fanout->sync);
+        free(fanout);
+        fanout = next;
+    }
+    broker->fanouts = NULL;
 }
 
 static void init_pool(md_buffer_pool_t* pool) {
@@ -223,7 +280,63 @@ static md_broker_route_t* find_route(const md_broker_t* broker, const char* stab
     return NULL;
 }
 
+static bool route_has_display(const md_broker_route_t* route, const md_broker_peer_t* peer) {
+    if (route == NULL || peer == NULL) return false;
+    for (uint32_t i = 0; i < route->display_count; ++i) {
+        if (route->displays[i] == peer) return true;
+    }
+    return false;
+}
+
+static int route_add_display(md_broker_route_t* route, md_broker_peer_t* peer) {
+    if (route == NULL || peer == NULL || route->display_count >= MD_BROKER_MAX_PEERS ||
+        route_has_display(route, peer)) return MD_ERR_STATE;
+    route->displays[route->display_count++] = peer;
+    if (route->display == NULL) route->display = peer;
+    peer->display_pool_sent = false;
+    peer->display_unbind_pending = false;
+    peer->display_unbind_generation = 0;
+    return MD_OK;
+}
+
+static void route_remove_display(md_broker_route_t* route, md_broker_peer_t* peer) {
+    if (route == NULL || peer == NULL) return;
+    uint32_t index = route->display_count;
+    for (uint32_t i = 0; i < route->display_count; ++i) {
+        if (route->displays[i] == peer) {
+            index = i;
+            break;
+        }
+    }
+    if (index == route->display_count) return;
+    if (index + 1u < route->display_count) {
+        memmove(&route->displays[index], &route->displays[index + 1u],
+                sizeof(route->displays[0]) * (route->display_count - index - 1u));
+    }
+    --route->display_count;
+    route->displays[route->display_count] = NULL;
+    route->display = route->display_count > 0 ? route->displays[0] : NULL;
+}
+
+static bool route_all_unbound(const md_broker_route_t* route) {
+    if (route == NULL) return true;
+    for (uint32_t i = 0; i < route->display_count; ++i) {
+        if (route->displays[i]->display_unbind_pending) return false;
+    }
+    return true;
+}
+
 static md_broker_route_t* create_route(md_broker_t* broker, const char* stable_id) {
+    if (broker->route_count >= broker->max_routes) {
+        for (uint32_t i = 0; i < broker->route_count; ++i) {
+            md_broker_route_t* candidate = &broker->routes[i];
+            if (candidate->display == NULL && candidate->producer == NULL &&
+                !candidate->pool_active && !candidate->unbind_pending) {
+                remove_route(broker, candidate);
+                break;
+            }
+        }
+    }
     if (broker->route_count >= broker->max_routes) return NULL;
     md_broker_route_t* resized = realloc(
         broker->routes, sizeof(*broker->routes) * (size_t)(broker->route_count + 1u));
@@ -556,18 +669,33 @@ static int duplicate_fds(const int* source, size_t count, int* destination) {
     return MD_OK;
 }
 
-static bool formats_intersect(const md_broker_peer_t* display,
-                              const md_broker_peer_t* producer,
-                              md_format_cap_t* selected) {
+static bool format_supported_by_display(const md_broker_peer_t* display,
+                                        const md_format_cap_t* candidate) {
+    if (display == NULL || candidate == NULL) return false;
+    for (uint32_t c = 0; c < display->caps.format_count; ++c) {
+        const md_format_cap_t* right = &display->cap_formats[c];
+        if (candidate->fourcc == right->fourcc && candidate->plane_count == right->plane_count &&
+            candidate->modifier == right->modifier) return true;
+    }
+    return false;
+}
+
+static bool formats_intersect(const md_broker_route_t* route, md_format_cap_t* selected) {
+    if (route == NULL || route->producer == NULL || route->display_count == 0) return false;
+    const md_broker_peer_t* producer = route->producer;
     for (uint32_t p = 0; p < producer->producer_info.format_count; ++p) {
-        for (uint32_t c = 0; c < display->caps.format_count; ++c) {
-            const md_format_cap_t* left = &producer->producer_formats[p];
-            const md_format_cap_t* right = &display->cap_formats[c];
-            if (left->fourcc == right->fourcc && left->plane_count == right->plane_count &&
-                left->modifier == right->modifier) {
-                *selected = *left;
-                return true;
+        const md_format_cap_t* candidate = &producer->producer_formats[p];
+        bool supported = true;
+        for (uint32_t d = 0; d < route->display_count; ++d) {
+            if (!route->displays[d]->ready ||
+                !format_supported_by_display(route->displays[d], candidate)) {
+                supported = false;
+                break;
             }
+        }
+        if (supported) {
+            *selected = *candidate;
+            return true;
         }
     }
     return false;
@@ -575,15 +703,14 @@ static bool formats_intersect(const md_broker_peer_t* display,
 
 static int send_output_config(md_broker_route_t* route) {
     if (route == NULL || route->display == NULL || route->producer == NULL) return MD_ERR_STATE;
-    md_broker_peer_t* display = route->display;
     md_broker_peer_t* producer = route->producer;
-    if (!formats_intersect(display, producer, &route->selected_format)) return MD_ERR_UNSUPPORTED;
+    if (!formats_intersect(route, &route->selected_format)) return MD_ERR_UNSUPPORTED;
     route->format_selected = true;
     md_producer_config_t config = {
-        .physical_width = display->output.physical_width,
-        .physical_height = display->output.physical_height,
-        .refresh_mhz = display->output.refresh_mhz,
-        .transform = display->output.transform,
+        .physical_width = route->display->output.physical_width,
+        .physical_height = route->display->output.physical_height,
+        .refresh_mhz = route->display->output.refresh_mhz,
+        .transform = route->display->output.transform,
         .fourcc = route->selected_format.fourcc,
         .plane_count = route->selected_format.plane_count,
         .modifier = route->selected_format.modifier,
@@ -598,8 +725,10 @@ static int send_output_config(md_broker_route_t* route) {
     return rc;
 }
 
-static int send_pool_to_display(md_broker_route_t* route) {
-    if (route == NULL || route->display == NULL || !route->pool_active) return MD_ERR_STATE;
+static int send_pool_to_display(md_broker_route_t* route, md_broker_peer_t* display) {
+    if (route == NULL || display == NULL || !route_has_display(route, display) ||
+        !route->pool_active) return MD_ERR_STATE;
+    if (display->display_unbind_pending || display->display_pool_sent) return MD_OK;
     size_t count = (size_t)route->pool.buffer_count * (size_t)route->pool.plane_count;
     int fds[MD_WIRE_MAX_FDS];
     int source_fds[MD_WIRE_MAX_FDS];
@@ -620,20 +749,67 @@ static int send_pool_to_display(md_broker_route_t* route) {
         close_fds(fds, count);
         return MD_ERR_PROTOCOL;
     }
-    int rc = queue_peer(route->display, MD_OP_BIND_BUFFERS, 0, payload, writer.size, fds, count);
+    int rc = queue_peer(display, MD_OP_BIND_BUFFERS, 0, payload, writer.size, fds, count);
     if (rc != MD_OK) close_fds(fds, count);
+    else display->display_pool_sent = true;
     return rc;
 }
 
-static int send_unbind_to_display(md_broker_route_t* route) {
-    if (route == NULL || route->display == NULL || !route->pool_active) return MD_ERR_STATE;
+static int send_pool_to_displays(md_broker_route_t* route) {
+    if (route == NULL || !route->pool_active) return MD_ERR_STATE;
+    for (uint32_t i = 0; i < route->display_count; ++i) {
+        int rc = send_pool_to_display(route, route->displays[i]);
+        if (rc != MD_OK) return rc;
+    }
+    return MD_OK;
+}
+
+static int send_unbind_to_display(md_broker_route_t* route, md_broker_peer_t* display) {
+    if (route == NULL || display == NULL || !route_has_display(route, display) ||
+        !route->pool_active) return MD_ERR_STATE;
+    if (display->display_unbind_pending) return MD_OK;
     uint8_t payload[8];
     size_t payload_size = 0;
     if (encode_u64_payload(route->pool_generation, payload, sizeof(payload), &payload_size) != MD_OK) {
         return MD_ERR_PROTOCOL;
     }
-    route->unbind_pending = true;
-    return send_encoded(route->display, MD_OP_UNBIND, payload, payload_size);
+    int rc = send_encoded(display, MD_OP_UNBIND, payload, payload_size);
+    if (rc == MD_OK) {
+        display->display_unbind_pending = true;
+        display->display_unbind_generation = route->pool_generation;
+        route->unbind_pending = true;
+        route->pending_unbind_generation = route->pool_generation;
+    }
+    return rc;
+}
+
+static int send_unbind_to_displays(md_broker_route_t* route) {
+    if (route == NULL || !route->pool_active) return MD_ERR_STATE;
+    for (uint32_t i = 0; i < route->display_count; ++i) {
+        int rc = send_unbind_to_display(route, route->displays[i]);
+        if (rc != MD_OK) return rc;
+    }
+    return MD_OK;
+}
+
+static int send_config_to_display(md_broker_route_t* route, md_broker_peer_t* display) {
+    if (route == NULL || display == NULL || !display->ready || !route->config_active) {
+        return MD_OK;
+    }
+    uint8_t payload[128];
+    md_writer_t writer;
+    md_writer_init(&writer, payload, sizeof(payload));
+    if (md_proto_encode_config(&writer, &route->config) != 0) return MD_ERR_PROTOCOL;
+    return queue_peer(display, MD_OP_SET_CONFIG, 0, payload, writer.size, NULL, 0);
+}
+
+static int send_config_to_displays(md_broker_route_t* route) {
+    if (route == NULL) return MD_ERR_INVALID;
+    for (uint32_t i = 0; i < route->display_count; ++i) {
+        int rc = send_config_to_display(route, route->displays[i]);
+        if (rc != MD_OK) return rc;
+    }
+    return MD_OK;
 }
 
 static int send_retire_to_producer(md_broker_route_t* route) {
@@ -650,7 +826,7 @@ static int send_retire_to_producer(md_broker_route_t* route) {
 static int maybe_bind_pool(md_broker_route_t* route) {
     if (route == NULL || route->display == NULL || route->producer == NULL ||
         !route->pool_active || route->unbind_pending || route->retire_pending) return MD_OK;
-    return send_pool_to_display(route);
+    return send_pool_to_displays(route);
 }
 
 static int handle_display_packet(md_broker_t* broker, md_broker_peer_t* peer,
@@ -668,7 +844,7 @@ static int handle_display_packet(md_broker_t* broker, md_broker_peer_t* peer,
         if (rc != MD_OK) return rc;
         route = find_route(broker, stable_id);
         if (route == NULL) route = create_route(broker, stable_id);
-        if (route == NULL || route->display != NULL) {
+        if (route == NULL || route->display_count >= MD_BROKER_MAX_PEERS) {
             free(stable_id);
             free(name);
             return MD_ERR_STATE;
@@ -679,7 +855,8 @@ static int handle_display_packet(md_broker_t* broker, md_broker_peer_t* peer,
         peer->output.stable_id = peer->output_stable_id;
         peer->output.name = peer->output_name;
         peer->route = route;
-        route->display = peer;
+        rc = route_add_display(route, peer);
+        if (rc != MD_OK) return rc;
         uint8_t payload[8];
         size_t payload_size = 0;
         if (encode_u64_payload(route->output_id, payload, sizeof(payload), &payload_size) != MD_OK) {
@@ -688,19 +865,36 @@ static int handle_display_packet(md_broker_t* broker, md_broker_peer_t* peer,
         return send_encoded(peer, MD_OP_OUTPUT_ACCEPTED, payload, payload_size);
     }
     case MD_OP_CONSUMER_CAPS: {
-        if (route == NULL || route->display != peer || packet->fd_count != 0 ||
+        if (route == NULL || !route_has_display(route, peer) || packet->fd_count != 0 ||
             peer->cap_formats != NULL) return MD_ERR_PROTOCOL;
         int rc = parse_caps(packet, &peer->caps, &peer->cap_formats);
         if (rc != MD_OK) return rc;
         peer->ready = true;
-        if (route->producer != NULL && route->producer->ready && !route->output_config_sent) {
-            rc = send_output_config(route);
-            if (rc != MD_OK) return rc;
+        if (route->producer != NULL && route->producer->ready) {
+            md_format_cap_t selected;
+            if (!formats_intersect(route, &selected)) return MD_ERR_UNSUPPORTED;
+            bool format_changed = route->format_selected &&
+                (route->selected_format.fourcc != selected.fourcc ||
+                 route->selected_format.plane_count != selected.plane_count ||
+                 route->selected_format.modifier != selected.modifier);
+            if (format_changed && route->pool_active) {
+                route->unbind_retiring_old_producer = false;
+                rc = send_unbind_to_displays(route);
+                if (rc != MD_OK) return rc;
+            } else if (!route->output_config_sent || format_changed) {
+                route->output_config_sent = false;
+                rc = send_output_config(route);
+                if (rc != MD_OK) return rc;
+            }
         }
+        rc = send_config_to_display(route, peer);
+        if (rc != MD_OK) return rc;
         return maybe_bind_pool(route);
     }
     case MD_OP_UPDATE_OUTPUT: {
-        if (route == NULL || route->display != peer || packet->fd_count != 0) return MD_ERR_PROTOCOL;
+        if (route == NULL || !route_has_display(route, peer) || packet->fd_count != 0) {
+            return MD_ERR_PROTOCOL;
+        }
         md_reader_t reader;
         md_reader_init(&reader, packet->payload, packet->payload_size);
         uint32_t transform;
@@ -714,9 +908,13 @@ static int handle_display_packet(md_broker_t* broker, md_broker_peer_t* peer,
         if (rc == 0) rc = md_reader_finish(&reader);
         if (rc != 0 || transform > MD_TRANSFORM_FLIPPED_270) return MD_ERR_PROTOCOL;
         peer->output.transform = (md_transform_t)transform;
+        if (route->display != peer) return MD_OK;
         route->output_config_sent = false;
         if (route->producer != NULL && route->producer->ready) {
-            if (route->pool_active && !route->retire_pending) return send_retire_to_producer(route);
+            if (route->pool_active && !route->unbind_pending) {
+                route->unbind_retiring_old_producer = false;
+                return send_unbind_to_displays(route);
+            }
             return send_output_config(route);
         }
         return MD_OK;
@@ -740,18 +938,29 @@ static int handle_display_packet(md_broker_t* broker, md_broker_peer_t* peer,
     case MD_OP_WINDOW_STATE:
         return MD_OK;
     case MD_OP_UNBIND_DONE: {
-        if (route == NULL || route->display != peer || packet->fd_count != 0 ||
-            !route->unbind_pending) return MD_ERR_PROTOCOL;
+        if (route == NULL || !route_has_display(route, peer) || packet->fd_count != 0 ||
+            !peer->display_unbind_pending) return MD_ERR_PROTOCOL;
         uint64_t generation;
         if (md_proto_decode_unbind(packet->payload, packet->payload_size, &generation) != 0 ||
-            generation != route->pool_generation) return MD_ERR_PROTOCOL;
-        route->unbind_pending = false;
-        if (route->producer != NULL && route->producer->ready && !route->retire_pending) {
+            generation != peer->display_unbind_generation) return MD_ERR_PROTOCOL;
+        peer->display_unbind_pending = false;
+        peer->display_unbind_generation = 0;
+        peer->display_pool_sent = false;
+        route->unbind_pending = !route_all_unbound(route);
+        if (route->unbind_pending) return MD_OK;
+        route->pending_unbind_generation = 0;
+        if (route->unbind_retiring_old_producer) {
+            route->unbind_retiring_old_producer = false;
+            return route->pool_active ? maybe_bind_pool(route) : MD_OK;
+        }
+        if (route->pool_active && route->producer != NULL && route->producer->ready &&
+            !route->retire_pending) {
             return send_retire_to_producer(route);
         }
-        route->pool_active = false;
-        route->pool_generation = 0;
-        close_pool(&route->pool);
+        if (!route->pool_active) {
+            route->pool_generation = 0;
+            close_pool(&route->pool);
+        }
         return MD_OK;
     }
     default:
@@ -790,6 +999,22 @@ static int handle_producer_packet(md_broker_t* broker, md_broker_peer_t* peer,
         peer->producer_info.formats = formats;
         peer->route = route;
         route->producer = peer;
+        /* A producer reconnect invalidates the old producer's pool. Keep the
+         * consumer alive, but explicitly unbind it before accepting frames
+         * from the new producer. The old descriptors are broker-owned and
+         * can be closed immediately after the unbind packet is queued. */
+        if (route->pool_active) {
+            if (route->display_count > 0 && route->display->ready && !route->unbind_pending) {
+                (void)send_unbind_to_displays(route);
+                route->unbind_retiring_old_producer = true;
+            }
+            close_pool(&route->pool);
+            route->pool_active = false;
+            route->pool_generation = 0;
+        }
+        route->retire_pending = false;
+        route->output_config_sent = false;
+        route->format_selected = false;
         peer->id = broker->next_peer_id++;
         if (peer->id == 0) peer->id = broker->next_peer_id++;
         uint8_t payload[16];
@@ -826,30 +1051,148 @@ static int handle_producer_packet(md_broker_t* broker, md_broker_peer_t* peer,
         route->pool = pool;
         route->pool_generation = pool.generation;
         route->pool_active = true;
-        if (route->display != NULL && route->display->ready) return maybe_bind_pool(route);
+        for (uint32_t i = 0; i < route->display_count; ++i) {
+            route->displays[i]->display_pool_sent = false;
+        }
+        if (route->display_count > 0) return maybe_bind_pool(route);
         return MD_OK;
     }
     case MD_OP_PRODUCER_FRAME: {
         if (route == NULL || route->producer != peer || !route->pool_active ||
-            packet->fd_count != 2 || route->display == NULL || !route->display->ready) {
+            packet->fd_count != 2) {
             return MD_ERR_PROTOCOL;
         }
         md_frame_t frame;
-        if (md_proto_decode_frame(packet->payload, packet->payload_size, &frame) != 0 ||
-            frame.buffer_generation != route->pool_generation ||
-            frame.buffer_index >= route->pool.buffer_count) return MD_ERR_PROTOCOL;
+        if (md_proto_decode_frame(packet->payload, packet->payload_size, &frame) != 0) {
+            close(packet->fds[0]);
+            packet->fds[0] = -1;
+            (void)md_display_signal_release_syncobj_on_node(
+                packet->fds[1], route->producer->producer_info.drm_render_major,
+                route->producer->producer_info.drm_render_minor);
+            packet->fds[1] = -1;
+            return MD_ERR_PROTOCOL;
+        }
+        if (frame.buffer_generation != route->pool_generation) {
+            close(packet->fds[0]);
+            packet->fds[0] = -1;
+            (void)md_display_signal_release_syncobj_on_node(
+                packet->fds[1], route->producer->producer_info.drm_render_major,
+                route->producer->producer_info.drm_render_minor);
+            packet->fds[1] = -1;
+            return MD_OK;
+        }
+        if (frame.buffer_index >= route->pool.buffer_count) {
+            close(packet->fds[0]);
+            packet->fds[0] = -1;
+            (void)md_display_signal_release_syncobj_on_node(
+                packet->fds[1], route->producer->producer_info.drm_render_major,
+                route->producer->producer_info.drm_render_minor);
+            packet->fds[1] = -1;
+            return MD_ERR_PROTOCOL;
+        }
+        md_broker_peer_t* active_displays[MD_BROKER_MAX_PEERS];
+        uint32_t active_count = 0;
+        for (uint32_t i = 0; i < route->display_count; ++i) {
+            md_broker_peer_t* display = route->displays[i];
+            if (display->ready && !display->display_unbind_pending) {
+                active_displays[active_count++] = display;
+            }
+        }
+        if (active_count == 0) {
+            close(packet->fds[0]);
+            packet->fds[0] = -1;
+            (void)md_display_signal_release_syncobj_on_node(
+                packet->fds[1], route->producer->producer_info.drm_render_major,
+                route->producer->producer_info.drm_render_minor);
+            packet->fds[1] = -1;
+            return MD_OK;
+        }
+
+        if (active_count > 1) {
+            int release_fds[MD_BROKER_MAX_PEERS];
+            md_sync_fanout_t* sync = NULL;
+            if (md_sync_fanout_create_on_node(
+                    packet->fds[1], active_count, route->producer->producer_info.drm_render_major,
+                    route->producer->producer_info.drm_render_minor, release_fds, &sync) == MD_OK) {
+                md_broker_fanout_t* fanout = calloc(1, sizeof(*fanout));
+                if (fanout == NULL) {
+                    (void)md_display_signal_release_syncobj_on_node(
+                        packet->fds[1], route->producer->producer_info.drm_render_major,
+                        route->producer->producer_info.drm_render_minor);
+                    packet->fds[1] = -1;
+                    for (uint32_t i = 0; i < active_count; ++i) {
+                        if (release_fds[i] >= 0) close(release_fds[i]);
+                        md_sync_fanout_abandon(sync, i);
+                    }
+                    md_sync_fanout_free(sync);
+                    return MD_ERR_NOMEM;
+                }
+                fanout->sync = sync;
+                fanout->display_count = active_count;
+                for (uint32_t i = 0; i < active_count; ++i) {
+                    fanout->displays[i] = active_displays[i];
+                    int acquire_fd = fcntl(packet->fds[0], F_DUPFD_CLOEXEC, 0);
+                    int fds[2] = {acquire_fd, release_fds[i]};
+                    release_fds[i] = -1;
+                    if (acquire_fd < 0 ||
+                        queue_peer(active_displays[i], MD_OP_FRAME_READY, packet->flags,
+                                   packet->payload, packet->payload_size, fds, 2) != MD_OK) {
+                        close_fds(fds, 2);
+                        md_sync_fanout_abandon(sync, i);
+                    }
+                }
+                fanout->next = broker->fanouts;
+                broker->fanouts = fanout;
+                return MD_OK;
+            }
+
+            /* A syncobj can only be delivered to one consumer directly. If
+             * aggregation is unavailable on this GPU, preserve correctness
+             * by rendering on the primary display and dropping this frame for
+             * mirrors instead of duplicating the producer release FD. */
+        }
+
+        md_broker_peer_t* display = active_displays[0];
         int fds[2];
-        if (duplicate_fds(packet->fds, 2, fds) != MD_OK) return MD_ERR_IO;
-        int rc = queue_peer(route->display, MD_OP_FRAME_READY, packet->flags,
+        if (duplicate_fds(packet->fds, 2, fds) != MD_OK) {
+            close(packet->fds[0]);
+            packet->fds[0] = -1;
+            (void)md_display_signal_release_syncobj_on_node(
+                packet->fds[1], route->producer->producer_info.drm_render_major,
+                route->producer->producer_info.drm_render_minor);
+            packet->fds[1] = -1;
+            return MD_OK;
+        }
+        int release_fallback = fcntl(fds[1], F_DUPFD_CLOEXEC, 0);
+        int rc = queue_peer(display, MD_OP_FRAME_READY, packet->flags,
                             packet->payload, packet->payload_size, fds, 2);
-        if (rc != MD_OK) close_fds(fds, 2);
-        return rc;
+        if (release_fallback >= 0) {
+            if (rc == MD_OK) {
+                close(release_fallback);
+            } else {
+                (void)md_display_signal_release_syncobj_on_node(
+                    release_fallback, route->producer->producer_info.drm_render_major,
+                    route->producer->producer_info.drm_render_minor);
+            }
+        } else if (rc != MD_OK) {
+            (void)md_display_signal_release_syncobj_on_node(
+                packet->fds[1], route->producer->producer_info.drm_render_major,
+                route->producer->producer_info.drm_render_minor);
+            packet->fds[1] = -1;
+        }
+        return rc == MD_OK ? MD_OK : MD_ERR_IO;
     }
-    case MD_OP_PRODUCER_SET_CONFIG:
+    case MD_OP_PRODUCER_SET_CONFIG: {
         if (route == NULL || route->producer != peer || packet->fd_count != 0 ||
-            route->display == NULL || !route->display->ready) return MD_ERR_STATE;
-        return queue_peer(route->display, MD_OP_SET_CONFIG, packet->flags,
-                          packet->payload, packet->payload_size, NULL, 0);
+            !peer->ready) return MD_ERR_STATE;
+        md_display_config_t config;
+        if (md_proto_decode_config(packet->payload, packet->payload_size, &config) != 0) {
+            return MD_ERR_PROTOCOL;
+        }
+        route->config = config;
+        route->config_active = true;
+        return send_config_to_displays(route);
+    }
     case MD_OP_RETIRE_DONE: {
         if (route == NULL || route->producer != peer || packet->fd_count != 0 ||
             !route->retire_pending) return MD_ERR_PROTOCOL;
@@ -861,8 +1204,10 @@ static int handle_producer_packet(md_broker_t* broker, md_broker_peer_t* peer,
         close_pool(&route->pool);
         route->pool_generation = 0;
         route->output_config_sent = false;
-        if (route->producer->ready && route->display != NULL && route->display->ready) {
-            return send_output_config(route);
+        if (route->producer->ready && route->display_count > 0 && route->display->ready) {
+            int rc = send_output_config(route);
+            if (rc != MD_OK) return rc;
+            return send_config_to_displays(route);
         }
         return MD_OK;
     }
@@ -905,35 +1250,44 @@ static int handle_peer_packet(md_broker_t* broker, md_broker_peer_t* peer,
 }
 
 static void detach_peer_from_route(md_broker_t* broker, md_broker_peer_t* peer) {
+    (void)broker;
     md_broker_route_t* route = peer->route;
     if (route == NULL) return;
-    if (route->display == peer) {
-        route->display = NULL;
-        if (route->pool_active && route->producer != NULL && route->producer->ready &&
-            !route->retire_pending) {
-            (void)send_retire_to_producer(route);
-        }
+    if (route_has_display(route, peer)) {
+        route_remove_display(route, peer);
+        /* Keep the producer and its broker-owned pool alive. A replacement
+         * display can bind the exact same generation without forcing the
+         * renderer to allocate again. */
+        route->unbind_pending = !route_all_unbound(route);
     }
     if (route->producer == peer) {
-        bool had_pool = route->pool_active;
-        uint64_t generation = route->pool_generation;
-        if (route->display != NULL && route->display->ready && had_pool &&
-            !route->unbind_pending) {
-            (void)send_unbind_to_display(route);
+        if (route->pool_active) {
+            if (route->display_count > 0 && route->display->ready && !route->unbind_pending) {
+                (void)send_unbind_to_displays(route);
+            }
+            route->unbind_retiring_old_producer = route->unbind_pending;
         }
         route->producer = NULL;
+        /* The producer owns the authoritative generation. Once it is gone,
+         * retain only the route identity, not stale DMA-BUF descriptors. */
         close_pool(&route->pool);
-        route->pool_active = had_pool && route->unbind_pending;
+        route->pool_active = false;
         route->retire_pending = false;
         route->output_config_sent = false;
-        route->pool_generation = route->pool_active ? generation : 0;
+        route->format_selected = false;
+        route->pool_generation = 0;
+        route->config_active = false;
     }
     peer->route = NULL;
-    if (route->display == NULL && route->producer == NULL) remove_route(broker, route);
+    /* Keep an empty route so a peer that restarts with the same stable id can
+     * reclaim its output id and negotiated lifecycle. It is bounded by the
+     * broker's max_routes setting and is reclaimed when the broker itself is
+     * destroyed. */
 }
 
 static void disconnect_peer(md_broker_t* broker, md_broker_peer_t* peer) {
     if (peer == NULL) return;
+    abandon_peer_fanouts(broker, peer);
     detach_peer_from_route(broker, peer);
     remove_peer_slot(broker, peer);
     free_peer(peer);
@@ -1010,6 +1364,7 @@ void md_broker_free(md_broker_t* broker) {
     for (size_t i = 0; i < MD_BROKER_MAX_PEERS; ++i) {
         if (broker->peers[i] != NULL) free_peer(broker->peers[i]);
     }
+    free_fanouts(broker);
     for (uint32_t i = 0; i < broker->route_count; ++i) free_route(&broker->routes[i]);
     free(broker->routes);
     if (broker->listen_fd >= 0) close(broker->listen_fd);
@@ -1081,6 +1436,7 @@ const char* md_broker_socket_path(const md_broker_t* broker) {
 int md_broker_dispatch(md_broker_t* broker, int timeout_ms) {
     if (broker == NULL || !broker->listening) return MD_ERR_STATE;
     if (atomic_load(&broker->stopping)) return MD_ERR_DISCONNECTED;
+    poll_fanouts(broker);
 
     struct pollfd descriptors[1 + MD_BROKER_MAX_PEERS];
     md_broker_peer_t* owners[MD_BROKER_MAX_PEERS];
@@ -1137,5 +1493,6 @@ int md_broker_dispatch(md_broker_t* broker, int timeout_ms) {
         }
         if (disconnect && peer_index(broker, peer) >= 0) disconnect_peer(broker, peer);
     }
+    poll_fanouts(broker);
     return handled;
 }

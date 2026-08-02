@@ -4,6 +4,7 @@
 
 #include "codec.h"
 #include "protocol.h"
+#include "sync_fanout.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -680,15 +681,45 @@ static int process_packet(md_display_t* display, md_packet_t* packet) {
         return MD_OK;
     }
     case MD_OP_FRAME_READY: {
-        if (packet->fd_count != 2) return fail_session(display, MD_ERR_PROTOCOL, "frame FD count mismatch");
+        if (packet->fd_count != 2) {
+            if (packet->fd_count >= 1 && packet->fds[0] >= 0) {
+                close(packet->fds[0]);
+                packet->fds[0] = -1;
+            }
+            if (packet->fd_count >= 2 && packet->fds[1] >= 0) {
+                (void)md_display_signal_release_syncobj_on_node(
+                    packet->fds[1], display->output.drm_render_major,
+                    display->output.drm_render_minor);
+                packet->fds[1] = -1;
+            }
+            return fail_session(display, MD_ERR_PROTOCOL, "frame FD count mismatch");
+        }
         md_frame_t frame;
         if (md_proto_decode_frame(packet->payload, packet->payload_size, &frame) != 0) {
+            close(packet->fds[0]);
+            packet->fds[0] = -1;
+            (void)md_display_signal_release_syncobj_on_node(
+                packet->fds[1], display->output.drm_render_major,
+                display->output.drm_render_minor);
+            packet->fds[1] = -1;
             return fail_session(display, MD_ERR_PROTOCOL, "malformed frame");
         }
         if (!display->pool_active || frame.buffer_generation != display->pool.generation) {
+            close(packet->fds[0]);
+            packet->fds[0] = -1;
+            (void)md_display_signal_release_syncobj_on_node(
+                packet->fds[1], display->output.drm_render_major,
+                display->output.drm_render_minor);
+            packet->fds[1] = -1;
             return MD_OK;
         }
         if (frame.buffer_index >= display->pool.buffer_count) {
+            close(packet->fds[0]);
+            packet->fds[0] = -1;
+            (void)md_display_signal_release_syncobj_on_node(
+                packet->fds[1], display->output.drm_render_major,
+                display->output.drm_render_minor);
+            packet->fds[1] = -1;
             return fail_session(display, MD_ERR_PROTOCOL, "frame buffer index out of range");
         }
         frame.acquire_sync_fd = packet->fds[0];

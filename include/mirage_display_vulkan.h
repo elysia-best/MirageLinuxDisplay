@@ -25,13 +25,18 @@ typedef struct md_vk_imported_pool {
     uint32_t width;
     uint32_t height;
     uint32_t fourcc;
+    uint32_t plane_count;
     uint64_t modifier;
     VkFormat format;
     VkImage images[MIRAGE_DISPLAY_MAX_BUFFERS];
+    /* Plane zero aliases plane_memories[][0] for source compatibility. */
     VkDeviceMemory memories[MIRAGE_DISPLAY_MAX_BUFFERS];
+    VkDeviceMemory plane_memories[MIRAGE_DISPLAY_MAX_BUFFERS][MIRAGE_DISPLAY_MAX_PLANES];
     VkImageView views[MIRAGE_DISPLAY_MAX_BUFFERS];
     VkSemaphore acquire_semaphores[MIRAGE_DISPLAY_MAX_BUFFERS];
     VkSemaphore release_semaphores[MIRAGE_DISPLAY_MAX_BUFFERS];
+    /* Non-null for formats such as NV12 whose image views require conversion. */
+    VkSamplerYcbcrConversion ycbcr_conversion;
 } md_vk_imported_pool_t;
 
 /* Creates an importer using an already-created Vulkan instance/device. */
@@ -65,6 +70,15 @@ int md_vk_importer_release_barrier(const md_vk_importer_t* importer,
 
 /* DRM fourcc mapping supported by the first Vulkan backend revision. */
 int md_vk_fourcc_to_format(uint32_t fourcc, VkFormat* format, VkComponentMapping* mapping);
+/*
+ * Enumerates DRM modifiers that support all required tiling features. Passing
+ * caps=NULL and capacity=0 queries the count. Each returned plane_count is the
+ * modifier memory-plane count required by the explicit layout import.
+ */
+int md_vk_query_format_caps(VkPhysicalDevice physical_device, uint32_t fourcc,
+                            VkFormatFeatureFlags required_features,
+                            md_format_cap_t* caps, uint32_t capacity,
+                            uint32_t* out_count);
 const char* md_vk_result_string(VkResult result);
 
 #ifdef __cplusplus

@@ -1,16 +1,16 @@
 import QtQuick
-import Mirage.Display 1.0
+import "MirageDisplayEmbed" as Mirage
 
-MirageDisplayItem {
+Mirage.MirageDisplayItem {
     id: display
 
     property string configuredDisplayName: ""
     property string configuredSocketPath: ""
     property bool configuredPointerForwarding: true
     property int configuredWindowStateFlags: 0
-    readonly property string rendererBackendName: rendererBackend === MirageDisplayItem.BackendVulkan
+    readonly property string rendererBackendName: rendererBackend === Mirage.MirageDisplayItem.BackendVulkan
         ? "vulkan"
-        : (rendererBackend === MirageDisplayItem.BackendOpenGLEGL ? "egl" : "none")
+        : (rendererBackend === Mirage.MirageDisplayItem.BackendOpenGLEGL ? "egl" : "none")
 
     readonly property string screenIdentity: {
         const manufacturer = (Screen.manufacturer || "").trim()
@@ -35,10 +35,10 @@ MirageDisplayItem {
     refreshMhz: Math.max(1, Math.round((Screen.refreshRate || 60) * 1000))
     outputTransform: {
         switch (Screen.orientation) {
-        case Qt.PortraitOrientation: return MirageDisplayItem.Transform90;
-        case Qt.InvertedLandscapeOrientation: return MirageDisplayItem.Transform180;
-        case Qt.InvertedPortraitOrientation: return MirageDisplayItem.Transform270;
-        default: return MirageDisplayItem.TransformNormal;
+        case Qt.PortraitOrientation: return Mirage.MirageDisplayItem.Transform90;
+        case Qt.InvertedLandscapeOrientation: return Mirage.MirageDisplayItem.Transform180;
+        case Qt.InvertedPortraitOrientation: return Mirage.MirageDisplayItem.Transform270;
+        default: return Mirage.MirageDisplayItem.TransformNormal;
         }
     }
     pointerForwarding: configuredPointerForwarding

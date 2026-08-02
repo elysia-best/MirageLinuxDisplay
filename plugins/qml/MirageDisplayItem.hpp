@@ -1,10 +1,17 @@
 #pragma once
 
+#include "MiragePointerForwarder.hpp"
+
 #include <mirage_display.h>
 #include <mirage_display_egl.h>
+#ifdef MIRAGE_DISPLAY_QML_WITH_VULKAN
+#include <mirage_display_vulkan.h>
+#include <mirage_display_vulkan_blit.h>
+#endif
 
 #include <QColor>
 #include <QByteArray>
+#include <QPointer>
 #include <QMutex>
 #include <QQuickItem>
 #include <QQuickWindow>
@@ -13,6 +20,7 @@
 #include <QString>
 #include <QTimer>
 #include <QVector>
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <qqml.h>
@@ -27,6 +35,7 @@ class MirageDisplayItem : public QQuickItem {
     QML_ELEMENT
 
     Q_PROPERTY(QString socketPath READ socketPath WRITE setSocketPath NOTIFY socketPathChanged)
+    Q_PROPERTY(QString defaultSocketPath READ defaultSocketPath CONSTANT)
     Q_PROPERTY(QString outputStableId READ outputStableId WRITE setOutputStableId NOTIFY outputChanged)
     Q_PROPERTY(QString outputName READ outputName WRITE setOutputName NOTIFY outputChanged)
     Q_PROPERTY(int physicalWidth READ physicalWidth WRITE setPhysicalWidth NOTIFY outputChanged)
@@ -42,6 +51,9 @@ class MirageDisplayItem : public QQuickItem {
     Q_PROPERTY(qulonglong outputId READ outputId NOTIFY outputIdChanged)
     Q_PROPERTY(qulonglong framesReceived READ framesReceived NOTIFY framesReceivedChanged)
     Q_PROPERTY(QColor clearColor READ clearColor NOTIFY clearColorChanged)
+    Q_PROPERTY(RendererBackend rendererBackend READ rendererBackend NOTIFY rendererBackendChanged)
+    Q_PROPERTY(QString lastError READ lastError NOTIFY lastErrorChanged)
+    Q_PROPERTY(qulonglong importedGeneration READ importedGeneration NOTIFY importedGenerationChanged)
 
 public:
     enum OutputTransform {
@@ -56,10 +68,18 @@ public:
     };
     Q_ENUM(OutputTransform)
 
+    enum RendererBackend {
+        BackendNone = 0,
+        BackendOpenGLEGL = 1,
+        BackendVulkan = 2,
+    };
+    Q_ENUM(RendererBackend)
+
     explicit MirageDisplayItem(QQuickItem* parent = nullptr);
     ~MirageDisplayItem() override;
 
     QString socketPath() const { return m_socketPath; }
+    QString defaultSocketPath() const { return m_defaultSocketPath; }
     void setSocketPath(const QString& value);
 
     QString outputStableId() const { return m_outputStableId; }
@@ -90,6 +110,11 @@ public:
     qulonglong outputId() const { return m_outputId; }
     qulonglong framesReceived() const { return m_framesReceived; }
     QColor clearColor() const { return m_clearColor; }
+    RendererBackend rendererBackend() const { return m_rendererBackend.load(); }
+    QString lastError() const { return m_lastError; }
+    qulonglong importedGeneration() const {
+        return static_cast<qulonglong>(m_importedGeneration.load());
+    }
 
     bool eventFilter(QObject* watched, QEvent* event) override;
 
@@ -102,6 +127,9 @@ signals:
     void outputIdChanged();
     void framesReceivedChanged();
     void clearColorChanged();
+    void rendererBackendChanged();
+    void lastErrorChanged();
+    void importedGenerationChanged();
 
 protected:
     void componentComplete() override;
@@ -133,6 +161,10 @@ private:
 
     void initializeRenderer();
     void invalidateRenderer();
+    bool initializeOpenGLRenderer();
+#ifdef MIRAGE_DISPLAY_QML_WITH_VULKAN
+    bool initializeVulkanRenderer();
+#endif
     bool importPendingPool(const md_buffer_pool_t& pool);
     void releaseRenderPool();
     void releaseAfterRendering();
@@ -142,10 +174,15 @@ private:
     void scheduleReconnect();
     md_output_info_t makeOutputInfo(QByteArray& stableId, QByteArray& name) const;
     static void dropFrame(PendingFrame& frame);
-    static uint32_t linuxButton(Qt::MouseButton button);
-    bool mapPointer(const QPointF& scenePosition, float& x, float& y) const;
+    static uint64_t monotonicTimestampUs();
+    void releasePointerState(uint64_t timestamp);
+    void forwardPointerEvent(const MiragePointerForwarder::Event& event);
+    void setRendererBackend(RendererBackend backend);
+    void setLastError(const QString& error);
+    void setImportedGeneration(uint64_t generation);
 
     QString m_socketPath;
+    QString m_defaultSocketPath;
     QString m_outputStableId { QStringLiteral("kde:unknown") };
     QString m_outputName { QStringLiteral("KDE wallpaper") };
     int m_physicalWidth = 1920;
@@ -156,18 +193,23 @@ private:
     int m_refreshMhz = 60000;
     OutputTransform m_outputTransform = TransformNormal;
     bool m_pointerForwarding = true;
-    bool m_pointerInside = false;
+    MiragePointerForwarder m_pointer;
     quint32 m_windowStateFlags = 0;
     bool m_connected = false;
     qulonglong m_outputId = 0;
     qulonglong m_framesReceived = 0;
     QColor m_clearColor { Qt::black };
+    std::atomic<RendererBackend> m_rendererBackend { BackendNone };
+    QString m_lastError;
+    std::atomic_uint32_t m_drmRenderMajor { 0 };
+    std::atomic_uint32_t m_drmRenderMinor { 0 };
 
     md_display_t* m_display = nullptr;
     QSocketNotifier* m_readNotifier = nullptr;
     QSocketNotifier* m_writeNotifier = nullptr;
     QTimer m_reconnectTimer;
     QTimer m_outputUpdateTimer;
+    QPointer<QQuickWindow> m_filteredWindow;
 
     QMutex m_stateMutex;
     md_buffer_pool_t m_pendingPool {};
@@ -181,9 +223,18 @@ private:
     std::atomic_bool m_rendererReady { false };
     md_egl_importer_t* m_importer = nullptr;
     GlEglImageTargetTexture2D m_imageTargetTexture = nullptr;
-    uint64_t m_importedGeneration = 0;
+    std::atomic_uint64_t m_importedGeneration { 0 };
     QVector<unsigned int> m_glTextures;
     QVector<QSGTexture*> m_qsgTextures;
     int m_currentBuffer = -1;
     int m_activeReleaseFd = -1;
+
+#ifdef MIRAGE_DISPLAY_QML_WITH_VULKAN
+    md_vk_importer_t* m_vkImporter = nullptr;
+    md_vk_blitter_t* m_vkBlitter = nullptr;
+    VkDevice m_vkDevice = VK_NULL_HANDLE;
+    QVector<md_format_cap_t> m_vkFormats;
+    std::array<uint8_t, VK_UUID_SIZE> m_vkDeviceUuid {};
+    std::array<uint8_t, VK_UUID_SIZE> m_vkDriverUuid {};
+#endif
 };

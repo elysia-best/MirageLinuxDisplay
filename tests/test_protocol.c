@@ -75,6 +75,39 @@ static void test_bind_decode(void) {
     assert(md_proto_decode_bind_buffers(bytes, writer.size, &pool) != 0);
 }
 
+static void test_multiplane_bind_round_trip(void) {
+    md_buffer_pool_t source;
+    memset(&source, 0, sizeof(source));
+    source.generation = 11;
+    source.buffer_count = 2;
+    source.width = 1280;
+    source.height = 720;
+    source.fourcc = UINT32_C(0x3231564e); /* NV12 */
+    source.plane_count = 2;
+    source.modifier = UINT64_C(0x0102030405060708);
+    for (uint32_t b = 0; b < source.buffer_count; ++b) {
+        for (uint32_t p = 0; p < source.plane_count; ++p) {
+            source.planes[b][p].fd = -1;
+            source.planes[b][p].stride = p == 0 ? 1280 : 1280;
+            source.planes[b][p].offset = p == 0 ? 0 : 921600;
+            source.planes[b][p].size = p == 0 ? 921600 : 460800;
+        }
+    }
+    uint8_t bytes[512];
+    md_writer_t writer;
+    md_writer_init(&writer, bytes, sizeof(bytes));
+    assert(md_proto_encode_offer_buffers(&writer, &source) == 0);
+
+    md_buffer_pool_t decoded;
+    assert(md_proto_decode_bind_buffers(bytes, writer.size, &decoded) == 0);
+    assert(decoded.generation == source.generation);
+    assert(decoded.buffer_count == 2);
+    assert(decoded.plane_count == 2);
+    assert(decoded.modifier == source.modifier);
+    assert(decoded.planes[0][1].offset == 921600);
+    assert(decoded.planes[1][0].stride == 1280);
+}
+
 static void test_invalid_utf8(void) {
     uint8_t bytes[32];
     md_writer_t writer;
@@ -87,6 +120,7 @@ int main(void) {
     test_hello_golden_vector();
     test_welcome_decode();
     test_bind_decode();
+    test_multiplane_bind_round_trip();
     test_invalid_utf8();
     return 0;
 }

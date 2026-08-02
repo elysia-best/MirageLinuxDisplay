@@ -22,14 +22,18 @@ typedef struct broker_thread {
 typedef struct display_observer {
     unsigned connected;
     unsigned buffers;
+    unsigned unbinds;
     unsigned configs;
     unsigned frames;
+    uint64_t output_id;
+    uint64_t expected_generation;
 } display_observer_t;
 
 typedef struct producer_observer {
     unsigned connected;
     unsigned configs;
     unsigned motion;
+    uint64_t output_id;
 } producer_observer_t;
 
 static void* broker_main(void* opaque) {
@@ -45,27 +49,34 @@ static void* broker_main(void* opaque) {
 static void on_display_connected(void* opaque, uint64_t output_id) {
     display_observer_t* observer = opaque;
     assert(output_id != 0);
+    observer->output_id = output_id;
     ++observer->connected;
 }
 
 static void on_display_buffers(void* opaque, const md_buffer_pool_t* pool) {
     display_observer_t* observer = opaque;
-    assert(pool->generation == 1);
+    assert(pool->generation == observer->expected_generation);
     assert(pool->buffer_count == 2);
     assert(pool->planes[0][0].fd >= 0);
     ++observer->buffers;
 }
 
+static void on_display_buffers_releasing(void* opaque, const md_buffer_pool_t* pool) {
+    display_observer_t* observer = opaque;
+    assert(pool->generation == observer->expected_generation);
+    ++observer->unbinds;
+}
+
 static void on_display_config(void* opaque, const md_display_config_t* config) {
     display_observer_t* observer = opaque;
-    assert(config->generation == 1);
+    assert(config->generation == observer->expected_generation);
     assert(config->destination.width == 1280.0f);
     ++observer->configs;
 }
 
 static void on_display_frame(void* opaque, const md_frame_t* frame) {
     display_observer_t* observer = opaque;
-    assert(frame->buffer_generation == 1);
+    assert(frame->buffer_generation == observer->expected_generation);
     assert(frame->buffer_index == 1);
     assert(frame->acquire_sync_fd >= 0);
     assert(frame->release_syncobj_fd >= 0);
@@ -84,6 +95,7 @@ static void on_producer_connected(void* opaque, uint64_t producer_id, uint64_t o
     producer_observer_t* observer = opaque;
     assert(producer_id != 0);
     assert(output_id != 0);
+    observer->output_id = output_id;
     ++observer->connected;
 }
 
@@ -144,6 +156,22 @@ static void pump_producer(md_producer_t* producer, producer_observer_t* observer
     assert(observer->motion >= motion);
 }
 
+static void pump_display_unbind(md_display_t* display, display_observer_t* observer,
+                                unsigned unbinds) {
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        if (observer->unbinds >= unbinds && !md_display_wants_writable(display)) return;
+        struct pollfd descriptor = {
+            .fd = md_display_get_fd(display),
+            .events = POLLIN | (md_display_wants_writable(display) ? POLLOUT : 0),
+            .revents = 0,
+        };
+        assert(poll(&descriptor, 1, 50) >= 0);
+        if ((descriptor.revents & POLLIN) != 0) assert(md_display_dispatch(display) >= 0);
+        if ((descriptor.revents & POLLOUT) != 0) assert(md_display_handle_writable(display) >= 0);
+    }
+    assert(observer->unbinds >= unbinds);
+}
+
 int main(void) {
     char socket_path[128];
     assert(snprintf(socket_path, sizeof(socket_path), "@mirage-display-broker-%ld",
@@ -168,10 +196,11 @@ int main(void) {
     broker_thread_t broker_thread = {.broker = broker};
     assert(pthread_create(&broker_thread.thread, NULL, broker_main, &broker_thread) == 0);
 
-    display_observer_t display_observer = {0};
+    display_observer_t display_observer = {.expected_generation = 1};
     md_display_callbacks_t display_callbacks = {
         .on_connected = on_display_connected,
         .on_buffers_ready = on_display_buffers,
+        .on_buffers_releasing = on_display_buffers_releasing,
         .on_config = on_display_config,
         .on_frame = on_display_frame,
         .on_disconnected = on_display_disconnected,
@@ -232,6 +261,7 @@ int main(void) {
     assert(md_producer_connect(producer, socket_path, "test-producer", "0.1", &producer_info,
                                3000) == MD_OK);
     assert(producer_observer.connected == 1);
+    assert(producer_observer.output_id == display_observer.output_id);
     pump_producer(producer, &producer_observer, 1, 0);
 
     md_buffer_pool_t pool;
@@ -270,6 +300,93 @@ int main(void) {
 
     assert(md_display_send_pointer_motion(display, 10.0f, 20.0f, 100, 0) == MD_OK);
     pump_producer(producer, &producer_observer, 1, 1);
+
+    display_observer_t mirror_observer = {.expected_generation = 1};
+    md_display_callbacks_t mirror_callbacks = display_callbacks;
+    mirror_callbacks.user_data = &mirror_observer;
+    md_display_t* mirror_display = md_display_new(&mirror_callbacks);
+    assert(mirror_display != NULL);
+    assert(md_display_connect(mirror_display, socket_path, "test-display-mirror", "0.1",
+                              &output, &caps, 3000) == MD_OK);
+    assert(mirror_observer.output_id == display_observer.output_id);
+    pump_display(mirror_display, &mirror_observer, 1, 1, 0);
+
+    acquire_fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    release_fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    assert(acquire_fd >= 0 && release_fd >= 0);
+    assert(md_producer_submit_frame(producer, 1, 1, 6, acquire_fd, release_fd) == MD_OK);
+    pump_display(display, &display_observer, 1, 1, 2);
+    assert(mirror_observer.frames == 0);
+
+    md_display_free(mirror_display);
+    mirror_display = NULL;
+    usleep(50000);
+
+    const uint64_t stable_output_id = display_observer.output_id;
+    md_display_free(display);
+    display = NULL;
+    usleep(50000);
+
+    display_observer_t reconnected_observer = {.expected_generation = 1};
+    md_display_callbacks_t reconnected_callbacks = display_callbacks;
+    reconnected_callbacks.user_data = &reconnected_observer;
+    display = md_display_new(&reconnected_callbacks);
+    assert(display != NULL);
+    assert(md_display_connect(display, socket_path, "test-display-restarted", "0.1",
+                              &output, &caps, 3000) == MD_OK);
+    assert(reconnected_observer.connected == 1);
+    assert(reconnected_observer.output_id == stable_output_id);
+    pump_display(display, &reconnected_observer, 1, 0, 0);
+
+    acquire_fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    release_fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    assert(acquire_fd >= 0 && release_fd >= 0);
+    assert(md_producer_submit_frame(producer, 1, 1, 7, acquire_fd, release_fd) == MD_OK);
+    pump_display(display, &reconnected_observer, 1, 0, 1);
+
+    md_producer_free(producer);
+    producer = NULL;
+    pump_display_unbind(display, &reconnected_observer, 1);
+    usleep(50000);
+
+    reconnected_observer.expected_generation = 2;
+    producer_observer_t restarted_producer_observer = {0};
+    md_producer_callbacks_t restarted_producer_callbacks = producer_callbacks;
+    restarted_producer_callbacks.user_data = &restarted_producer_observer;
+    producer = md_producer_new(&restarted_producer_callbacks);
+    assert(producer != NULL);
+    assert(md_producer_connect(producer, socket_path, "test-producer-restarted", "0.1",
+                               &producer_info, 3000) == MD_OK);
+    assert(restarted_producer_observer.connected == 1);
+    assert(restarted_producer_observer.output_id == stable_output_id);
+    pump_producer(producer, &restarted_producer_observer, 1, 0);
+
+    memset(&pool, 0, sizeof(pool));
+    pool.generation = 2;
+    pool.buffer_count = 2;
+    pool.width = 1280;
+    pool.height = 720;
+    pool.fourcc = format.fourcc;
+    pool.plane_count = 1;
+    for (uint32_t i = 0; i < pool.buffer_count; ++i) {
+        pool.planes[i][0].fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+        assert(pool.planes[i][0].fd >= 0);
+        pool.planes[i][0].stride = 5120;
+        pool.planes[i][0].size = UINT64_C(3686400);
+    }
+    assert(md_producer_offer_buffers(producer, &pool) == MD_OK);
+    for (uint32_t i = 0; i < pool.buffer_count; ++i) close(pool.planes[i][0].fd);
+    pump_display(display, &reconnected_observer, 2, 0, 1);
+
+    config.generation = 2;
+    assert(md_producer_set_config(producer, &config) == MD_OK);
+    pump_display(display, &reconnected_observer, 2, 2, 1);
+
+    acquire_fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    release_fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    assert(acquire_fd >= 0 && release_fd >= 0);
+    assert(md_producer_submit_frame(producer, 2, 1, 8, acquire_fd, release_fd) == MD_OK);
+    pump_display(display, &reconnected_observer, 2, 2, 2);
 
     md_display_free(display);
     md_producer_free(producer);

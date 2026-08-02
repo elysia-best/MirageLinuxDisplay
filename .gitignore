@@ -11,6 +11,8 @@ build.ninja
 compile_commands.json
 Testing/
 install_manifest.txt
+_CPack*/
+*.zip
 
 # Compiled objects and libraries
 *.o

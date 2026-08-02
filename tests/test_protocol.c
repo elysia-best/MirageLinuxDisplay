@@ -1,5 +1,10 @@
 #include "protocol.h"
 
+/* Keep assertions live even in Release builds (-DNDEBUG), so test
+ * binaries still exercise the checks they were written for. */
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include <assert.h>
 #include <stdint.h>
 #include <stdlib.h>

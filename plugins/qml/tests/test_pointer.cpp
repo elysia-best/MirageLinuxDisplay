@@ -2,6 +2,10 @@
 
 #include <QVector>
 
+/* Keep assertions live even in Release builds (-DNDEBUG). */
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include <assert.h>
 #include <cmath>
 

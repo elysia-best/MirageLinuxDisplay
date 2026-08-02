@@ -2,6 +2,11 @@
 #include "mirage_display_vulkan_blit.h"
 #include "mirage_display_vulkan_export.h"
 
+/* Keep assertions live even in Release builds (-DNDEBUG), so test
+ * binaries still exercise the checks they were written for. */
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include <assert.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -41,9 +46,42 @@ static void test_invalid_context(void) {
     md_vk_export_context_t export_context = {0};
     assert(md_vk_exporter_new(NULL) == NULL);
     assert(md_vk_exporter_new(&export_context) == NULL);
+
+    /* Exporter copy/export path invalid-parameter handling. All failure
+     * paths must leave caller-owned output fds at -1. */
+    int copy_acquire = 0;
+    int copy_release = 0;
+    assert(md_vk_exporter_copy_frame(NULL, 0, VK_NULL_HANDLE,
+                                     VK_IMAGE_LAYOUT_UNDEFINED, 0, 0,
+                                     &copy_acquire, &copy_release) == MD_ERR_INVALID);
+    assert(copy_acquire == -1 && copy_release == -1);
     assert(md_vk_exporter_copy_frame(NULL, 0, VK_NULL_HANDLE,
                                      VK_IMAGE_LAYOUT_UNDEFINED, 0, 0,
                                      NULL, NULL) == MD_ERR_INVALID);
+
+    int export_acquire = 0;
+    int export_release = 0;
+    assert(md_vk_exporter_export_frame(NULL, 0, VK_NULL_HANDLE,
+                                       &export_acquire, &export_release) == MD_ERR_INVALID);
+    assert(export_acquire == -1 && export_release == -1);
+
+    uint32_t slot = 99;
+    assert(md_vk_exporter_acquire(NULL, &slot) == MD_ERR_STATE);
+    assert(md_vk_exporter_pool(NULL) == NULL);
+    assert(md_vk_exporter_image(NULL, 0) == VK_NULL_HANDLE);
+    assert(md_vk_exporter_format(NULL) == VK_FORMAT_UNDEFINED);
+    md_vk_exporter_release_pool(NULL);
+    md_vk_exporter_cancel_frame(NULL, 0);
+    md_vk_export_pool_info_t pool_info = {
+        .generation = 1,
+        .buffer_count = 3,
+        .width = 1920,
+        .height = 1080,
+        .fourcc = DRM_FORMAT('X', 'B', '2', '4'),
+        .plane_count = 1,
+        .modifier = 0,
+    };
+    assert(md_vk_exporter_create_pool(NULL, &pool_info) == MD_ERR_INVALID);
 
     uint32_t count = 99;
     assert(md_vk_query_format_caps(VK_NULL_HANDLE, DRM_FORMAT('X', 'R', '2', '4'),

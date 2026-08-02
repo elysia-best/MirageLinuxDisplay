@@ -966,7 +966,6 @@ QSGNode* MirageDisplayItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeDat
                     m_qsgTextures.clear();
                 }
                 VkSemaphore acquireSemaphore = VK_NULL_HANDLE;
-                VkSemaphore releaseSemaphore = VK_NULL_HANDLE;
                 int acquireFd = frame.value.acquire_sync_fd;
                 frame.value.acquire_sync_fd = -1;
                 int rc = md_vk_import_acquire_sync(m_vkImporter, frame.value.buffer_index,
@@ -978,44 +977,32 @@ QSGNode* MirageDisplayItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeDat
                     }
                     setLastError(QStringLiteral("Vulkan acquire sync import failed"));
                 } else {
-                    int releaseFallbackFd = -1;
-                    if (frame.value.release_syncobj_fd >= 0) {
-                        releaseFallbackFd = fcntl(frame.value.release_syncobj_fd,
-                                                  F_DUPFD_CLOEXEC, 0);
-                    }
+                    /* The producer's release object is a DRM syncobj fd, not a
+                     * Vulkan opaque semaphore, so it must be signalled with
+                     * md_display_signal_release_syncobj once this consumer's GPU
+                     * has finished reading the buffer. The blit is synchronous;
+                     * on a fence timeout the submission is already in flight, so
+                     * drain the device before releasing the slot. */
                     int releaseFd = frame.value.release_syncobj_fd;
                     frame.value.release_syncobj_fd = -1;
-                    rc = md_vk_import_release_syncobj(m_vkImporter, frame.value.buffer_index,
-                                                      releaseFd, &releaseSemaphore);
-                    if (rc == MD_OK) {
-                        rc = md_vk_blitter_blit(m_vkBlitter, imported,
-                                                frame.value.buffer_index,
-                                                acquireSemaphore, releaseSemaphore);
+                    rc = md_vk_blitter_blit(m_vkBlitter, imported,
+                                            frame.value.buffer_index,
+                                            acquireSemaphore, VK_NULL_HANDLE);
+                    if (rc == MD_ERR_WOULD_BLOCK && m_vkDevice != VK_NULL_HANDLE) {
+                        if (vkDeviceWaitIdle(m_vkDevice) == VK_SUCCESS) rc = MD_OK;
                     }
                     if (rc == MD_OK) {
-                        if (releaseFallbackFd >= 0) close(releaseFallbackFd);
-                        releaseFallbackFd = -1;
+                        if (releaseFd >= 0) {
+                            (void)md_display_signal_release_syncobj(releaseFd);
+                        }
                         m_currentBuffer = 0;
                         setLastError({});
                     } else {
-                        /* Importing an opaque release FD transfers its
-                         * ownership to Vulkan. Keep a duplicate until the
-                         * relay has submitted successfully so every
-                         * pre-submit failure still releases the producer's
-                         * slot. A fence timeout means the submission is
-                         * already in flight; let its signal win instead of
-                         * releasing the slot early. */
-                        if (releaseFallbackFd >= 0) {
-                            if (rc != MD_ERR_WOULD_BLOCK) {
-                                (void)md_display_signal_release_syncobj(releaseFallbackFd);
-                            } else {
-                                close(releaseFallbackFd);
-                            }
-                            releaseFallbackFd = -1;
+                        if (releaseFd >= 0) {
+                            (void)md_display_signal_release_syncobj(releaseFd);
                         }
                         setLastError(QStringLiteral("Vulkan frame relay failed"));
                     }
-                    if (releaseFallbackFd >= 0) close(releaseFallbackFd);
                 }
             }
         } else
@@ -1023,8 +1010,10 @@ QSGNode* MirageDisplayItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeDat
         {
         bool valid = frame.value.buffer_generation == m_importedGeneration.load() &&
                      frame.value.buffer_index < static_cast<uint32_t>(m_qsgTextures.size());
-        if (!valid || m_importer == nullptr ||
-            md_egl_wait_acquire_sync(m_importer, frame.value.acquire_sync_fd) != MD_OK) {
+        const int waitResult = m_importer != nullptr
+                                   ? md_egl_wait_acquire_sync(m_importer, frame.value.acquire_sync_fd)
+                                   : MD_ERR_INVALID;
+        if (!valid || waitResult != MD_OK) {
             frame.value.acquire_sync_fd = -1;
             if (frame.value.release_syncobj_fd >= 0) {
                 (void)md_display_signal_release_syncobj(frame.value.release_syncobj_fd);

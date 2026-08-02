@@ -524,8 +524,7 @@ int md_vk_exporter_export_frame(md_vk_exporter_t* exporter, uint32_t buffer_inde
 }
 
 static int prepare_copy_commands(md_vk_exporter_t* exporter, uint32_t buffer_index,
-                                 VkImage source_image, VkImageLayout source_layout,
-                                 uint32_t source_width, uint32_t source_height) {
+                                 VkImage source_image, VkImageLayout source_layout) {
     if (exporter->copy_fence_pending) {
         if (vkWaitForFences(exporter->context.device, 1, &exporter->copy_fence,
                             VK_TRUE, UINT64_MAX) != VK_SUCCESS) {
@@ -587,12 +586,16 @@ static int prepare_copy_commands(md_vk_exporter_t* exporter, uint32_t buffer_ind
                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
                          0, NULL, 0, NULL, 2, before);
 
+    /* Copy only the negotiated pool region. The caller guarantees the
+     * source is at least pool-sized (intermediate images may be
+     * even-aligned while an output extent is odd), so the pool region is
+     * always inside the source bounds. */
     VkImageCopy region = {
         .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
         .srcOffset = {0, 0, 0},
         .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
         .dstOffset = {0, 0, 0},
-        .extent = {source_width, source_height, 1},
+        .extent = {exporter->pool.width, exporter->pool.height, 1},
     };
     vkCmdCopyImage(exporter->copy_command_buffer,
                    source_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -647,24 +650,7 @@ int md_vk_exporter_copy_frame(md_vk_exporter_t* exporter, uint32_t buffer_index,
         exporter->slots[buffer_index].busy || !exporter->slots[buffer_index].acquired) {
         return MD_ERR_INVALID;
     }
-    int rc = prepare_copy_commands(exporter, buffer_index, source_image, source_layout,
-                                   source_width, source_height);
-    if (rc == MD_OK && (source_width != exporter->pool.width ||
-                        source_height != exporter->pool.height)) {
-        /* Intermediate images are even-aligned while an output extent may be
-         * odd; copy only the negotiated pool region. */
-        VkImageCopy region = {
-            .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-            .srcOffset = {0, 0, 0},
-            .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-            .dstOffset = {0, 0, 0},
-            .extent = {exporter->pool.width, exporter->pool.height, 1},
-        };
-        vkCmdCopyImage(exporter->copy_command_buffer,
-                       source_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                       exporter->slots[buffer_index].image,
-                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-    }
+    int rc = prepare_copy_commands(exporter, buffer_index, source_image, source_layout);
     if (rc != MD_OK) return rc;
 
     VkSubmitInfo submit_info = {

@@ -3,6 +3,11 @@
 #include "mirage_display.h"
 #include "sync_fanout.h"
 
+/* Keep assertions live even in Release builds (-DNDEBUG), so test
+ * binaries still exercise the checks they were written for. */
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>

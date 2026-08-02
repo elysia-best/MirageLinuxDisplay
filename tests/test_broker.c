@@ -4,6 +4,11 @@
 #include "mirage_display_broker.h"
 #include "mirage_display_producer.h"
 
+/* Keep assertions live even in Release builds (-DNDEBUG), so test
+ * binaries still exercise the checks they were written for. */
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>

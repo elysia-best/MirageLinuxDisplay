@@ -5,6 +5,10 @@
 #include "codec.h"
 #include "protocol.h"
 
+/* Keep assertions live even in Release builds (-DNDEBUG). */
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include <assert.h>
 #include <fcntl.h>
 #include <poll.h>

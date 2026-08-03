@@ -1,59 +1,19 @@
 #define _GNU_SOURCE
 
 #include "mirage_display_vulkan_export.h"
-
 #include "mirage_display_vulkan.h"
+
+#include "common/drm.h"
+#include "common/util.h"
+#include "vulkan_util.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/ioctl.h>
 #include <unistd.h>
-
-#ifndef DRM_IOCTL_BASE
-#define DRM_IOCTL_BASE 'd'
-#endif
-
-struct md_drm_syncobj_create {
-    uint32_t handle;
-    uint32_t flags;
-};
-
-struct md_drm_syncobj_destroy {
-    uint32_t handle;
-    uint32_t pad;
-};
-
-struct md_drm_syncobj_handle {
-    uint32_t handle;
-    uint32_t flags;
-    int32_t fd;
-    uint32_t pad;
-};
-
-struct md_drm_syncobj_wait {
-    uint64_t handles;
-    int64_t timeout_nsec;
-    uint32_t count_handles;
-    uint32_t flags;
-    uint32_t first_signaled;
-    uint32_t pad;
-    uint64_t deadline_nsec;
-};
-
-#define MD_DRM_IOCTL_SYNCOBJ_CREATE \
-    _IOWR(DRM_IOCTL_BASE, 0xbf, struct md_drm_syncobj_create)
-#define MD_DRM_IOCTL_SYNCOBJ_DESTROY \
-    _IOWR(DRM_IOCTL_BASE, 0xc0, struct md_drm_syncobj_destroy)
-#define MD_DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD \
-    _IOWR(DRM_IOCTL_BASE, 0xc1, struct md_drm_syncobj_handle)
-#define MD_DRM_IOCTL_SYNCOBJ_WAIT \
-    _IOWR(DRM_IOCTL_BASE, 0xc3, struct md_drm_syncobj_wait)
-#define MD_DRM_SYNCOBJ_WAIT_ALL (UINT32_C(1) << 0)
 
 typedef struct md_vk_export_slot {
     VkImage image;
@@ -82,57 +42,9 @@ struct md_vk_exporter {
     bool copy_fence_pending;
 };
 
-static void init_pool(md_buffer_pool_t* pool) {
-    memset(pool, 0, sizeof(*pool));
-    for (size_t b = 0; b < MIRAGE_DISPLAY_MAX_BUFFERS; ++b) {
-        for (size_t p = 0; p < MIRAGE_DISPLAY_MAX_PLANES; ++p) {
-            pool->planes[b][p].fd = -1;
-        }
-    }
-}
-
-static int open_render_node(uint32_t minor_number) {
-    if (minor_number < 128u || minor_number > 255u) return -1;
-    char path[32];
-    int written = snprintf(path, sizeof(path), "/dev/dri/renderD%u", minor_number);
-    if (written <= 0 || (size_t)written >= sizeof(path)) return -1;
-    return open(path, O_RDWR | O_CLOEXEC);
-}
-
-static uint32_t choose_memory_type(VkPhysicalDevice physical_device, uint32_t type_bits) {
-    VkPhysicalDeviceMemoryProperties properties;
-    vkGetPhysicalDeviceMemoryProperties(physical_device, &properties);
-    for (uint32_t i = 0; i < properties.memoryTypeCount; ++i) {
-        if ((type_bits & (UINT32_C(1) << i)) != 0 &&
-            (properties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0) {
-            return i;
-        }
-    }
-    for (uint32_t i = 0; i < properties.memoryTypeCount; ++i) {
-        if ((type_bits & (UINT32_C(1) << i)) != 0) return i;
-    }
-    return UINT32_MAX;
-}
-
-static VkImageAspectFlagBits memory_plane_aspect(uint32_t plane) {
-    switch (plane) {
-    case 0: return VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT;
-    case 1: return VK_IMAGE_ASPECT_MEMORY_PLANE_1_BIT_EXT;
-    case 2: return VK_IMAGE_ASPECT_MEMORY_PLANE_2_BIT_EXT;
-    case 3: return VK_IMAGE_ASPECT_MEMORY_PLANE_3_BIT_EXT;
-    default: return (VkImageAspectFlagBits)0;
-    }
-}
-
 static void destroy_release_handle(md_vk_exporter_t* exporter, uint32_t index) {
     md_vk_export_slot_t* slot = &exporter->slots[index];
-    if (slot->release_handle != 0 && exporter->drm_fd >= 0) {
-        struct md_drm_syncobj_destroy destroy = {
-            .handle = slot->release_handle,
-            .pad = 0,
-        };
-        (void)ioctl(exporter->drm_fd, MD_DRM_IOCTL_SYNCOBJ_DESTROY, &destroy);
-    }
+    md_drm_destroy_syncobj(exporter->drm_fd, slot->release_handle);
     slot->release_handle = 0;
     slot->acquired = false;
     slot->busy = false;
@@ -170,7 +82,7 @@ md_vk_exporter_t* md_vk_exporter_new(const md_vk_export_context_t* context) {
     exporter->context = *context;
     exporter->drm_fd = context->drm_render_fd >= 0
                            ? fcntl(context->drm_render_fd, F_DUPFD_CLOEXEC, 0)
-                           : open_render_node(context->drm_render_minor);
+                           : md_drm_open_render_node(0, context->drm_render_minor);
     if (exporter->drm_fd < 0) {
         free(exporter);
         return NULL;
@@ -188,7 +100,7 @@ md_vk_exporter_t* md_vk_exporter_new(const md_vk_export_context_t* context) {
         free(exporter);
         return NULL;
     }
-    init_pool(&exporter->pool);
+    md_init_pool(&exporter->pool);
 
     VkCommandPoolCreateInfo pool_info = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
@@ -262,7 +174,7 @@ void md_vk_exporter_release_pool(md_vk_exporter_t* exporter) {
             exporter->slots[b].memory = VK_NULL_HANDLE;
         }
     }
-    init_pool(&exporter->pool);
+    md_init_pool(&exporter->pool);
     exporter->format = VK_FORMAT_UNDEFINED;
     exporter->cursor = 0;
     exporter->pool_active = false;
@@ -323,8 +235,13 @@ static int allocate_slot(md_vk_exporter_t* exporter, const md_vk_export_pool_inf
 
     VkMemoryRequirements requirements;
     vkGetImageMemoryRequirements(exporter->context.device, image, &requirements);
-    uint32_t memory_type = choose_memory_type(exporter->context.physical_device,
-                                              requirements.memoryTypeBits);
+    uint32_t memory_type = md_vk_choose_memory_type(
+        exporter->context.physical_device, requirements.memoryTypeBits,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (memory_type == UINT32_MAX) {
+        memory_type = md_vk_choose_memory_type(
+            exporter->context.physical_device, requirements.memoryTypeBits, 0);
+    }
     if (memory_type == UINT32_MAX) {
         vkDestroyImage(exporter->context.device, image, NULL);
         return MD_ERR_UNSUPPORTED;
@@ -389,7 +306,7 @@ static int allocate_slot(md_vk_exporter_t* exporter, const md_vk_export_pool_inf
             return MD_ERR_IO;
         }
         VkImageSubresource subresource = {
-            .aspectMask = memory_plane_aspect(plane),
+            .aspectMask = md_vk_memory_plane_aspect(plane),
             .mipLevel = 0,
             .arrayLayer = 0,
         };
@@ -716,3 +633,5 @@ void md_vk_exporter_cancel_frame(md_vk_exporter_t* exporter, uint32_t buffer_ind
     if (exporter == NULL || buffer_index >= MIRAGE_DISPLAY_MAX_BUFFERS) return;
     destroy_release_handle(exporter, buffer_index);
 }
+
+

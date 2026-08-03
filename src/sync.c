@@ -1,78 +1,16 @@
 #define _GNU_SOURCE
 
 #include "mirage_display.h"
+#include "common/drm.h"
 #include "sync_fanout.h"
 
-#include <fcntl.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdbool.h>
-#include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <sys/ioctl.h>
-#include <sys/stat.h>
-#include <sys/sysmacros.h>
 #include <time.h>
 #include <unistd.h>
-
-#ifndef DRM_IOCTL_BASE
-#define DRM_IOCTL_BASE 'd'
-#endif
-
-struct md_drm_syncobj_handle {
-    uint32_t handle;
-    uint32_t flags;
-    int32_t fd;
-    uint32_t pad;
-};
-struct md_drm_syncobj_create {
-    uint32_t handle;
-    uint32_t flags;
-};
-struct md_drm_syncobj_destroy {
-    uint32_t handle;
-    uint32_t pad;
-};
-struct md_drm_syncobj_transfer {
-    uint32_t src_handle;
-    uint32_t dst_handle;
-    uint64_t src_point;
-    uint64_t dst_point;
-    uint32_t flags;
-    uint32_t pad;
-};
-struct md_drm_syncobj_array {
-    uint64_t handles;
-    uint32_t count_handles;
-    uint32_t pad;
-};
-struct md_drm_syncobj_wait {
-    uint64_t handles;
-    int64_t timeout_nsec;
-    uint32_t count_handles;
-    uint32_t flags;
-    uint32_t first_signaled;
-    uint32_t pad;
-    uint64_t deadline_nsec;
-};
-
-#define MD_DRM_IOCTL_SYNCOBJ_CREATE \
-    _IOWR(DRM_IOCTL_BASE, 0xbf, struct md_drm_syncobj_create)
-#define MD_DRM_IOCTL_SYNCOBJ_DESTROY \
-    _IOWR(DRM_IOCTL_BASE, 0xc0, struct md_drm_syncobj_destroy)
-#define MD_DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE \
-    _IOWR(DRM_IOCTL_BASE, 0xc2, struct md_drm_syncobj_handle)
-#define MD_DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD \
-    _IOWR(DRM_IOCTL_BASE, 0xc1, struct md_drm_syncobj_handle)
-#define MD_DRM_IOCTL_SYNCOBJ_WAIT \
-    _IOWR(DRM_IOCTL_BASE, 0xc3, struct md_drm_syncobj_wait)
-#define MD_DRM_IOCTL_SYNCOBJ_SIGNAL \
-    _IOWR(DRM_IOCTL_BASE, 0xc5, struct md_drm_syncobj_array)
-#define MD_DRM_IOCTL_SYNCOBJ_TRANSFER \
-    _IOWR(DRM_IOCTL_BASE, 0xcc, struct md_drm_syncobj_transfer)
-
-#define MD_DRM_SYNCOBJ_FD_TO_HANDLE_IMPORT_SYNC_FILE (UINT32_C(1) << 0)
-#define MD_DRM_SYNCOBJ_WAIT_ALL (UINT32_C(1) << 0)
 
 struct md_sync_fanout {
     int drm_fd;
@@ -84,51 +22,10 @@ struct md_sync_fanout {
     bool finished;
 };
 
-static int open_render_node(uint32_t wanted_major, uint32_t wanted_minor) {
-    if (wanted_major != 0 || wanted_minor != 0) {
-        char paths[2][64];
-        size_t path_count = 0;
-        int written = snprintf(paths[path_count], sizeof(paths[path_count]),
-                                "/dev/char/%u:%u", wanted_major, wanted_minor);
-        if (written > 0 && (size_t)written < sizeof(paths[0])) ++path_count;
-        if (wanted_minor >= 128u && wanted_minor <= 255u && path_count < 2u) {
-            written = snprintf(paths[path_count], sizeof(paths[path_count]),
-                               "/dev/dri/renderD%u", wanted_minor);
-            if (written > 0 && (size_t)written < sizeof(paths[0])) ++path_count;
-        }
-        for (size_t i = 0; i < path_count; ++i) {
-            int fd = open(paths[i], O_RDWR | O_CLOEXEC);
-            if (fd < 0) continue;
-            struct stat status;
-            if (fstat(fd, &status) == 0 && S_ISCHR(status.st_mode) &&
-                (wanted_major == 0 || major(status.st_rdev) == wanted_major) &&
-                (wanted_minor == 0 || minor(status.st_rdev) == wanted_minor)) {
-                return fd;
-            }
-            close(fd);
-        }
-        return -1;
-    }
-    for (int minor = 128; minor <= 255; ++minor) {
-        char path[64];
-        int written = snprintf(path, sizeof(path), "/dev/dri/renderD%d", minor);
-        if (written <= 0 || (size_t)written >= sizeof(path)) continue;
-        int fd = open(path, O_RDWR | O_CLOEXEC);
-        if (fd >= 0) return fd;
-    }
-    return -1;
-}
-
 static int64_t monotonic_ns(void) {
     struct timespec value;
     if (clock_gettime(CLOCK_MONOTONIC, &value) != 0) return 0;
     return (int64_t)value.tv_sec * INT64_C(1000000000) + value.tv_nsec;
-}
-
-static void destroy_syncobj(int drm_fd, uint32_t handle) {
-    if (drm_fd < 0 || handle == 0) return;
-    struct md_drm_syncobj_destroy destroy = {.handle = handle, .pad = 0};
-    (void)ioctl(drm_fd, MD_DRM_IOCTL_SYNCOBJ_DESTROY, &destroy);
 }
 
 static int signal_syncobj_handles(int drm_fd, uint32_t* handles, uint32_t count) {
@@ -151,7 +48,7 @@ int md_sync_fanout_create_on_node(int original_syncobj_fd, uint32_t child_count,
 
     md_sync_fanout_t* fanout = calloc(1, sizeof(*fanout));
     if (fanout == NULL) return MD_ERR_NOMEM;
-    fanout->drm_fd = open_render_node(drm_major, drm_minor);
+    fanout->drm_fd = md_drm_open_render_node(drm_major, drm_minor);
     fanout->child_count = child_count;
     fanout->child_handles = calloc(child_count, sizeof(*fanout->child_handles));
     fanout->abandoned = calloc(child_count, sizeof(*fanout->abandoned));
@@ -256,10 +153,10 @@ void md_sync_fanout_free(md_sync_fanout_t* fanout) {
             (void)signal_syncobj_handles(fanout->drm_fd, &fanout->original_handle, 1);
         }
         for (uint32_t i = 0; i < fanout->child_count; ++i) {
-            destroy_syncobj(fanout->drm_fd,
+            md_drm_destroy_syncobj(fanout->drm_fd,
                             fanout->child_handles != NULL ? fanout->child_handles[i] : 0);
         }
-        destroy_syncobj(fanout->drm_fd, fanout->original_handle);
+        md_drm_destroy_syncobj(fanout->drm_fd, fanout->original_handle);
         close(fanout->drm_fd);
     }
     free(fanout->child_handles);
@@ -271,7 +168,7 @@ int md_display_signal_release_syncobj_on_node(int release_syncobj_fd,
                                                uint32_t drm_major,
                                                uint32_t drm_minor) {
     if (release_syncobj_fd < 0) return MD_ERR_INVALID;
-    int drm_fd = open_render_node(drm_major, drm_minor);
+    int drm_fd = md_drm_open_render_node(drm_major, drm_minor);
     if (drm_fd < 0) {
         close(release_syncobj_fd);
         return MD_ERR_IO;
@@ -309,7 +206,7 @@ int md_display_release_after_sync_file(int release_syncobj_fd, int sync_file_fd)
         if (sync_file_fd >= 0) close(sync_file_fd);
         return MD_ERR_INVALID;
     }
-    int drm_fd = open_render_node(0, 0);
+    int drm_fd = md_drm_open_render_node(0, 0);
     if (drm_fd < 0) {
         close(release_syncobj_fd);
         close(sync_file_fd);
@@ -360,3 +257,5 @@ done:
     close(drm_fd);
     return result;
 }
+
+

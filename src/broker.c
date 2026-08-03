@@ -3,6 +3,9 @@
 #include "mirage_display_broker.h"
 
 #include "codec.h"
+#include "common/net.h"
+#include "common/outbox.h"
+#include "common/util.h"
 #include "protocol.h"
 #include "sync_fanout.h"
 
@@ -23,25 +26,12 @@
 
 #define MD_BROKER_MAX_PEERS 32u
 #define MD_BROKER_DEFAULT_ROUTES 16u
-#define MD_BROKER_OUTBOX_LIMIT 64u
-#define MD_BROKER_MAX_STRING 4096u
 
 typedef enum md_broker_role {
     MD_BROKER_ROLE_NONE = 0,
     MD_BROKER_ROLE_DISPLAY = 1,
     MD_BROKER_ROLE_PRODUCER = 2,
 } md_broker_role_t;
-
-typedef struct md_broker_message {
-    struct md_broker_message* next;
-    uint16_t opcode;
-    uint16_t flags;
-    uint32_t serial;
-    size_t payload_size;
-    size_t fd_count;
-    int fds[MD_WIRE_MAX_FDS];
-    uint8_t payload[];
-} md_broker_message_t;
 
 typedef struct md_broker_peer md_broker_peer_t;
 typedef struct md_broker_route md_broker_route_t;
@@ -74,9 +64,7 @@ struct md_broker_peer {
     md_producer_info_t producer_info;
     md_format_cap_t* producer_formats;
 
-    md_broker_message_t* out_head;
-    md_broker_message_t* out_tail;
-    size_t out_count;
+    md_outbox_t outbox;
 };
 
 struct md_broker_route {
@@ -123,26 +111,7 @@ struct md_broker {
     uint32_t route_count;
     md_broker_fanout_t* fanouts;
 };
-
-static char* duplicate_string(const char* value) {
-    if (value == NULL) return NULL;
-    size_t length = strlen(value);
-    if (length > MD_BROKER_MAX_STRING) return NULL;
-    char* copy = malloc(length + 1u);
-    if (copy != NULL) memcpy(copy, value, length + 1u);
-    return copy;
-}
-
-static void close_fds(int* fds, size_t count) {
-    if (fds == NULL) return;
-    for (size_t i = 0; i < count; ++i) {
-        if (fds[i] >= 0) close(fds[i]);
-        fds[i] = -1;
-    }
-}
-
 static void poll_fanouts(md_broker_t* broker) {
-    if (broker == NULL) return;
     md_broker_fanout_t** link = &broker->fanouts;
     while (*link != NULL) {
         md_broker_fanout_t* fanout = *link;
@@ -158,7 +127,6 @@ static void poll_fanouts(md_broker_t* broker) {
 }
 
 static void abandon_peer_fanouts(md_broker_t* broker, md_broker_peer_t* peer) {
-    if (broker == NULL || peer == NULL) return;
     for (md_broker_fanout_t* fanout = broker->fanouts; fanout != NULL;
          fanout = fanout->next) {
         for (uint32_t i = 0; i < fanout->display_count; ++i) {
@@ -168,7 +136,6 @@ static void abandon_peer_fanouts(md_broker_t* broker, md_broker_peer_t* peer) {
 }
 
 static void free_fanouts(md_broker_t* broker) {
-    if (broker == NULL) return;
     md_broker_fanout_t* fanout = broker->fanouts;
     while (fanout != NULL) {
         md_broker_fanout_t* next = fanout->next;
@@ -177,37 +144,6 @@ static void free_fanouts(md_broker_t* broker) {
         fanout = next;
     }
     broker->fanouts = NULL;
-}
-
-static void init_pool(md_buffer_pool_t* pool) {
-    memset(pool, 0, sizeof(*pool));
-    for (size_t b = 0; b < MIRAGE_DISPLAY_MAX_BUFFERS; ++b) {
-        for (size_t p = 0; p < MIRAGE_DISPLAY_MAX_PLANES; ++p) pool->planes[b][p].fd = -1;
-    }
-}
-
-static void close_pool(md_buffer_pool_t* pool) {
-    if (pool == NULL) return;
-    for (uint32_t b = 0; b < pool->buffer_count; ++b) {
-        for (uint32_t p = 0; p < pool->plane_count; ++p) {
-            if (pool->planes[b][p].fd >= 0) close(pool->planes[b][p].fd);
-            pool->planes[b][p].fd = -1;
-        }
-    }
-    init_pool(pool);
-}
-
-static void clear_outbox(md_broker_peer_t* peer) {
-    md_broker_message_t* message = peer->out_head;
-    while (message != NULL) {
-        md_broker_message_t* next = message->next;
-        close_fds(message->fds, message->fd_count);
-        free(message);
-        message = next;
-    }
-    peer->out_head = NULL;
-    peer->out_tail = NULL;
-    peer->out_count = 0;
 }
 
 static void clear_peer_data(md_broker_peer_t* peer) {
@@ -235,7 +171,7 @@ static void clear_peer_data(md_broker_peer_t* peer) {
 static void free_peer(md_broker_peer_t* peer) {
     if (peer == NULL) return;
     if (peer->fd >= 0) close(peer->fd);
-    clear_outbox(peer);
+    md_outbox_clear(&peer->outbox);
     clear_peer_data(peer);
     free(peer);
 }
@@ -254,7 +190,7 @@ static void remove_peer_slot(md_broker_t* broker, md_broker_peer_t* peer) {
 
 static void free_route(md_broker_route_t* route) {
     if (route == NULL) return;
-    close_pool(&route->pool);
+    md_close_pool(&route->pool);
     free(route->stable_id);
     route->stable_id = NULL;
 }
@@ -319,33 +255,36 @@ static void route_remove_display(md_broker_route_t* route, md_broker_peer_t* pee
 }
 
 static bool route_all_unbound(const md_broker_route_t* route) {
-    if (route == NULL) return true;
     for (uint32_t i = 0; i < route->display_count; ++i) {
         if (route->displays[i]->display_unbind_pending) return false;
     }
     return true;
 }
 
-static md_broker_route_t* create_route(md_broker_t* broker, const char* stable_id) {
-    if (broker->route_count >= broker->max_routes) {
-        for (uint32_t i = 0; i < broker->route_count; ++i) {
-            md_broker_route_t* candidate = &broker->routes[i];
-            if (candidate->display == NULL && candidate->producer == NULL &&
-                !candidate->pool_active && !candidate->unbind_pending) {
-                remove_route(broker, candidate);
-                break;
-            }
+static bool reclaim_idle_route(md_broker_t* broker) {
+    for (uint32_t i = 0; i < broker->route_count; ++i) {
+        md_broker_route_t* candidate = &broker->routes[i];
+        if (candidate->display == NULL && candidate->producer == NULL &&
+            !candidate->pool_active && !candidate->unbind_pending) {
+            remove_route(broker, candidate);
+            return true;
         }
     }
-    if (broker->route_count >= broker->max_routes) return NULL;
+    return false;
+}
+
+static md_broker_route_t* create_route(md_broker_t* broker, const char* stable_id) {
+    if (broker->route_count >= broker->max_routes && !reclaim_idle_route(broker)) {
+        return NULL;
+    }
     md_broker_route_t* resized = realloc(
         broker->routes, sizeof(*broker->routes) * (size_t)(broker->route_count + 1u));
     if (resized == NULL) return NULL;
     broker->routes = resized;
     md_broker_route_t* route = &broker->routes[broker->route_count++];
     memset(route, 0, sizeof(*route));
-    init_pool(&route->pool);
-    route->stable_id = duplicate_string(stable_id);
+    md_init_pool(&route->pool);
+    route->stable_id = md_strdup(stable_id);
     if (route->stable_id == NULL) {
         --broker->route_count;
         return NULL;
@@ -418,23 +357,6 @@ static int encode_producer_accepted(uint64_t producer_id, uint64_t output_id,
     return MD_OK;
 }
 
-static int fill_unix_address(const char* path, struct sockaddr_un* address,
-                             socklen_t* address_length) {
-    if (path == NULL || address == NULL || address_length == NULL) return MD_ERR_INVALID;
-    size_t length = strlen(path);
-    memset(address, 0, sizeof(*address));
-    address->sun_family = AF_UNIX;
-    if (path[0] == '@') {
-        if (length <= 1u || length >= sizeof(address->sun_path)) return MD_ERR_INVALID;
-        memcpy(address->sun_path + 1, path + 1, length - 1u);
-        *address_length = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + length);
-    } else {
-        if (length == 0 || length >= sizeof(address->sun_path)) return MD_ERR_INVALID;
-        memcpy(address->sun_path, path, length + 1u);
-        *address_length = (socklen_t)sizeof(*address);
-    }
-    return MD_OK;
-}
 
 static int send_encoded(md_broker_peer_t* peer, uint16_t opcode, const uint8_t* payload,
                         size_t payload_size) {
@@ -594,81 +516,21 @@ static int parse_producer(const md_packet_t* packet, md_producer_info_t* info,
 
 static int queue_peer(md_broker_peer_t* peer, uint16_t opcode, uint16_t flags,
                       const uint8_t* payload, size_t payload_size, int* fds, size_t fd_count) {
-    if (peer == NULL || peer->fd < 0 || payload_size > MD_WIRE_MAX_PAYLOAD ||
-        fd_count > MD_WIRE_MAX_FDS) {
-        close_fds(fds, fd_count);
-        return MD_ERR_INVALID;
-    }
     uint32_t serial = peer->next_serial++;
-    if (peer->out_head == NULL) {
-        int result = md_codec_send(peer->fd, peer->minor, opcode, flags, serial,
-                                   payload, payload_size, fds, fd_count);
-        if (result == 0) {
-            close_fds(fds, fd_count);
-            return MD_OK;
-        }
-        if (result < 0) {
-            close_fds(fds, fd_count);
-            return MD_ERR_IO;
-        }
+    int rc = md_outbox_send_or_queue(&peer->outbox, peer->fd, peer->minor, opcode, flags,
+                                     serial, payload, payload_size, fds, fd_count, false);
+    if (rc == MD_OK || rc == MD_ERR_WOULD_BLOCK || rc == MD_ERR_NOMEM ||
+        rc == MD_ERR_INVALID) {
+        return rc;
     }
-    if (peer->out_count >= MD_BROKER_OUTBOX_LIMIT) {
-        close_fds(fds, fd_count);
-        return MD_ERR_WOULD_BLOCK;
-    }
-    md_broker_message_t* message = malloc(sizeof(*message) + payload_size);
-    if (message == NULL) {
-        close_fds(fds, fd_count);
-        return MD_ERR_NOMEM;
-    }
-    message->next = NULL;
-    message->opcode = opcode;
-    message->flags = flags;
-    message->serial = serial;
-    message->payload_size = payload_size;
-    message->fd_count = fd_count;
-    for (size_t i = 0; i < MD_WIRE_MAX_FDS; ++i) message->fds[i] = -1;
-    if (payload_size > 0) memcpy(message->payload, payload, payload_size);
-    for (size_t i = 0; i < fd_count; ++i) {
-        message->fds[i] = fds[i];
-        fds[i] = -1;
-    }
-    if (peer->out_tail != NULL) peer->out_tail->next = message;
-    else peer->out_head = message;
-    peer->out_tail = message;
-    ++peer->out_count;
-    return MD_OK;
+    return MD_ERR_IO;
 }
 
 static int flush_peer(md_broker_peer_t* peer) {
-    while (peer->out_head != NULL) {
-        md_broker_message_t* message = peer->out_head;
-        int result = md_codec_send(peer->fd, peer->minor, message->opcode, message->flags,
-                                   message->serial, message->payload, message->payload_size,
-                                   message->fds, message->fd_count);
-        if (result == 1) return MD_ERR_WOULD_BLOCK;
-        if (result < 0) return MD_ERR_IO;
-        close_fds(message->fds, message->fd_count);
-        peer->out_head = message->next;
-        if (peer->out_head == NULL) peer->out_tail = NULL;
-        --peer->out_count;
-        free(message);
-    }
-    return MD_OK;
+    int rc = md_outbox_flush(&peer->outbox, peer->fd, peer->minor);
+    if (rc == MD_ERR_WOULD_BLOCK) return MD_ERR_WOULD_BLOCK;
+    return rc < 0 ? MD_ERR_IO : MD_OK;
 }
-
-static int duplicate_fds(const int* source, size_t count, int* destination) {
-    for (size_t i = 0; i < count; ++i) destination[i] = -1;
-    for (size_t i = 0; i < count; ++i) {
-        destination[i] = fcntl(source[i], F_DUPFD_CLOEXEC, 0);
-        if (destination[i] < 0) {
-            close_fds(destination, count);
-            return MD_ERR_IO;
-        }
-    }
-    return MD_OK;
-}
-
 static bool format_supported_by_display(const md_broker_peer_t* display,
                                         const md_format_cap_t* candidate) {
     if (display == NULL || candidate == NULL) return false;
@@ -739,18 +601,18 @@ static int send_pool_to_display(md_broker_route_t* route, md_broker_peer_t* disp
             source_fds[index++] = route->pool.planes[b][p].fd;
         }
     }
-    if (duplicate_fds(source_fds, count, fds) != MD_OK) {
+    if (md_duplicate_fds(source_fds, count, fds) != MD_OK) {
         return MD_ERR_IO;
     }
     uint8_t payload[MD_WIRE_MAX_PAYLOAD];
     md_writer_t writer;
     md_writer_init(&writer, payload, sizeof(payload));
     if (md_proto_encode_offer_buffers(&writer, &route->pool) != 0) {
-        close_fds(fds, count);
+        md_close_fds(fds, count);
         return MD_ERR_PROTOCOL;
     }
     int rc = queue_peer(display, MD_OP_BIND_BUFFERS, 0, payload, writer.size, fds, count);
-    if (rc != MD_OK) close_fds(fds, count);
+    if (rc != MD_OK) md_close_fds(fds, count);
     else display->display_pool_sent = true;
     return rc;
 }
@@ -959,7 +821,7 @@ static int handle_display_packet(md_broker_t* broker, md_broker_peer_t* peer,
         }
         if (!route->pool_active) {
             route->pool_generation = 0;
-            close_pool(&route->pool);
+            md_close_pool(&route->pool);
         }
         return MD_OK;
     }
@@ -1008,7 +870,7 @@ static int handle_producer_packet(md_broker_t* broker, md_broker_peer_t* peer,
                 (void)send_unbind_to_displays(route);
                 route->unbind_retiring_old_producer = true;
             }
-            close_pool(&route->pool);
+            md_close_pool(&route->pool);
             route->pool_active = false;
             route->pool_generation = 0;
         }
@@ -1137,7 +999,7 @@ static int handle_producer_packet(md_broker_t* broker, md_broker_peer_t* peer,
                     if (acquire_fd < 0 ||
                         queue_peer(active_displays[i], MD_OP_FRAME_READY, packet->flags,
                                    packet->payload, packet->payload_size, fds, 2) != MD_OK) {
-                        close_fds(fds, 2);
+                        md_close_fds(fds, 2);
                         md_sync_fanout_abandon(sync, i);
                     }
                 }
@@ -1154,7 +1016,7 @@ static int handle_producer_packet(md_broker_t* broker, md_broker_peer_t* peer,
 
         md_broker_peer_t* display = active_displays[0];
         int fds[2];
-        if (duplicate_fds(packet->fds, 2, fds) != MD_OK) {
+        if (md_duplicate_fds(packet->fds, 2, fds) != MD_OK) {
             close(packet->fds[0]);
             packet->fds[0] = -1;
             (void)md_display_signal_release_syncobj_on_node(
@@ -1201,7 +1063,7 @@ static int handle_producer_packet(md_broker_t* broker, md_broker_peer_t* peer,
             generation != route->pool_generation) return MD_ERR_PROTOCOL;
         route->retire_pending = false;
         route->pool_active = false;
-        close_pool(&route->pool);
+        md_close_pool(&route->pool);
         route->pool_generation = 0;
         route->output_config_sent = false;
         if (route->producer->ready && route->display_count > 0 && route->display->ready) {
@@ -1270,7 +1132,7 @@ static void detach_peer_from_route(md_broker_t* broker, md_broker_peer_t* peer) 
         route->producer = NULL;
         /* The producer owns the authoritative generation. Once it is gone,
          * retain only the route identity, not stale DMA-BUF descriptors. */
-        close_pool(&route->pool);
+        md_close_pool(&route->pool);
         route->pool_active = false;
         route->retire_pending = false;
         route->output_config_sent = false;
@@ -1333,9 +1195,9 @@ md_broker_t* md_broker_new(const md_broker_options_t* options) {
     md_broker_t* broker = calloc(1, sizeof(*broker));
     if (broker == NULL) return NULL;
     broker->listen_fd = -1;
-    broker->socket_path = duplicate_string(options->socket_path);
-    broker->server_name = duplicate_string(options->server_name != NULL ? options->server_name : "mirage-display");
-    broker->server_version = duplicate_string(options->server_version != NULL ? options->server_version : "0.1");
+    broker->socket_path = md_strdup(options->socket_path);
+    broker->server_name = md_strdup(options->server_name != NULL ? options->server_name : "mirage-display");
+    broker->server_version = md_strdup(options->server_version != NULL ? options->server_version : "0.1");
     broker->features = options->features != 0
                            ? options->features
                            : MD_FEATURE_EXPLICIT_SYNC | MD_FEATURE_DRM_MODIFIERS |
@@ -1393,7 +1255,7 @@ int md_broker_listen(md_broker_t* broker) {
     if (fd < 0) return MD_ERR_IO;
     struct sockaddr_un address;
     socklen_t address_length;
-    int address_result = fill_unix_address(broker->socket_path, &address, &address_length);
+    int address_result = md_fill_unix_address(broker->socket_path, &address, &address_length);
     if (address_result != MD_OK) {
         close(fd);
         return address_result;
@@ -1448,7 +1310,7 @@ int md_broker_dispatch(md_broker_t* broker, int timeout_ms) {
         if (peer == NULL) continue;
         descriptors[count] = (struct pollfd){
             .fd = peer->fd,
-            .events = POLLIN | (peer->out_head != NULL ? POLLOUT : 0),
+            .events = POLLIN | (peer->outbox.head != NULL ? POLLOUT : 0),
             .revents = 0,
         };
         owners[owner_count++] = peer;
@@ -1496,3 +1358,5 @@ int md_broker_dispatch(md_broker_t* broker, int timeout_ms) {
     poll_fanouts(broker);
     return handled;
 }
+
+

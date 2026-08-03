@@ -1,4 +1,5 @@
 #include "mirage_display_vulkan_blit.h"
+#include "vulkan_util.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -15,19 +16,6 @@ struct md_vk_blitter {
     VkFormat format;
     bool content_valid;
 };
-
-static uint32_t choose_memory_type(VkPhysicalDevice physical_device, uint32_t type_bits,
-                                   VkMemoryPropertyFlags required) {
-    VkPhysicalDeviceMemoryProperties properties;
-    vkGetPhysicalDeviceMemoryProperties(physical_device, &properties);
-    for (uint32_t i = 0; i < properties.memoryTypeCount; ++i) {
-        if ((type_bits & (UINT32_C(1) << i)) != 0 &&
-            (properties.memoryTypes[i].propertyFlags & required) == required) {
-            return i;
-        }
-    }
-    return UINT32_MAX;
-}
 
 static void destroy_shadow(md_vk_blitter_t* blitter) {
     if (blitter->image != VK_NULL_HANDLE) {
@@ -75,7 +63,7 @@ static int ensure_shadow(md_vk_blitter_t* blitter, uint32_t width, uint32_t heig
 
     VkMemoryRequirements requirements;
     vkGetImageMemoryRequirements(blitter->context.device, blitter->image, &requirements);
-    uint32_t memory_type = choose_memory_type(blitter->context.physical_device,
+    uint32_t memory_type = md_vk_choose_memory_type(blitter->context.physical_device,
                                               requirements.memoryTypeBits,
                                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     if (memory_type == UINT32_MAX) {
@@ -306,3 +294,4 @@ uint32_t md_vk_blitter_height(const md_vk_blitter_t* blitter) {
 bool md_vk_blitter_has_content(const md_vk_blitter_t* blitter) {
     return blitter != NULL && blitter->content_valid;
 }
+

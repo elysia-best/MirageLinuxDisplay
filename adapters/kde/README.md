@@ -26,3 +26,24 @@ Qt Quick 显示项按场景图后端自动选择导入路径：
 两种会话类型下行为一致），不查询 X11 窗口。`MirageSurfaceEmbed.qml`
 变体用于把显示项嵌入其他 Plasma 界面（以 `MIRAGE_DISPLAY_QML_URI`
 含 `Embed` 时启用打包）。
+
+## 可安装壁纸包（kpackage）
+
+构建时会在构建目录生成 `mirage-wallpaper-<版本>.zip`（Embed 变体为
+`mirage-wallpaper-<版本>-embed.zip`），这是标准的 Plasma/Wallpaper
+kpackage：`metadata.json` 位于压缩包根目录，`contents/ui/main.qml` 为主脚本。
+安装到当前用户：
+
+```sh
+kpackagetool6 -t Plasma/Wallpaper -i mirage-wallpaper-0.1.0.zip
+```
+
+卸载：
+
+```sh
+kpackagetool6 -t Plasma/Wallpaper -r org.mirage.wallpaper
+```
+
+说明：根目录 CPack 生成的 `mirage-linux-display-<版本>-Linux.zip` 是核心库
+发行包，布局与壁纸包不同，不能直接交给 `kpackagetool6`。壁纸包由
+`mirage-wallpaper-package` 目标生成（随 `cmake --build` 自动构建）。

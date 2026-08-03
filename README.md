@@ -66,6 +66,12 @@ cmake -S . -B build-kde -G Ninja \
 cmake --build build-kde
 ```
 
+壁纸包构建后会生成可直接安装的 kpackage：
+
+```sh
+kpackagetool6 -t Plasma/Wallpaper -i build-kde/mirage-wallpaper-0.1.0.zip
+```
+
 安装（含 Plasma 壁纸包）：
 
 ```sh

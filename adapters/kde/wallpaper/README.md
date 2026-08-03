@@ -1,0 +1,46 @@
+# MirageWallpaper — Plasma 壁纸包
+
+这是 MirageLinuxDisplay 的 KDE Plasma 6 壁纸包（KPackage id：
+`org.mirage.wallpaper`）。它通过 Plasma 自身的壁纸表面接收来自
+MirageWallpaper 渲染器的 DMA-BUF 帧，并把指针与窗口状态回传给渲染器，
+X11 与 Wayland 会话行为一致。
+
+## 安装
+
+本 ZIP 即标准 KPackage 布局（`metadata.json` 位于压缩包根目录），可直接
+用 `kpackagetool6` 安装：
+
+```sh
+kpackagetool6 -t Plasma/Wallpaper -i mirage-wallpaper-0.1.0.zip
+```
+
+卸载：
+
+```sh
+kpackagetool6 -t Plasma/Wallpaper -r org.mirage.wallpaper
+```
+
+安装后在“桌面壁纸”中选择 **MirageWallpaper**，按需配置：
+
+- **Display name**：输出名称（留空自动）。
+- **Broker socket**：`mirage-display-v1` broker 的 Unix 域套接字路径
+  （留空使用默认路径）。
+- **Forward pointer events**：把指针事件回传给渲染器。
+- **Show diagnostics**：显示后端、连接状态、输出与帧计数等信息。
+
+## 打包
+
+在项目根目录（需要 Qt 6 与 EGL 开发环境）：
+
+```sh
+cmake -S . -B build-kde -G Ninja \
+  -DMIRAGE_DISPLAY_PLUGIN_QML=ON \
+  -DMIRAGE_DISPLAY_WITH_EGL=ON
+cmake --build build-kde
+```
+
+构建完成后在 `build-kde/` 生成 `mirage-wallpaper-<版本>.zip`
+（Embed 变体为 `mirage-wallpaper-<版本>-embed.zip`）。
+
+> 注意：根目录 CPack 生成的 `mirage-linux-display-<版本>-Linux.zip` 是
+> 核心库发行包，不是壁纸包，不能用于 `kpackagetool6 -i`。

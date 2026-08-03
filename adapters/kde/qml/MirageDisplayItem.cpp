@@ -792,6 +792,21 @@ void MirageDisplayItem::onDisconnected(void* userData, md_result_t reason, const
         self->m_connected = false;
         emit self->connectedChanged();
     }
+    if (self->m_outputId != 0) {
+        self->m_outputId = 0;
+        emit self->outputIdChanged();
+    }
+    /* A broker can vanish at any time; the library may fail the session from
+     * a send path where no QSocketNotifier event follows. Tear down the dead
+     * session and resume the reconnect loop so the wallpaper recovers as soon
+     * as the broker comes back. */
+    QPointer<MirageDisplayItem> guard(self);
+    QMetaObject::invokeMethod(self, [guard]() {
+        if (guard != nullptr) {
+            guard->closeConnection();
+            guard->scheduleReconnect();
+        }
+    }, Qt::QueuedConnection);
 }
 
 bool MirageDisplayItem::importPendingPool(const md_buffer_pool_t& pool) {

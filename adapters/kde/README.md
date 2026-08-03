@@ -29,13 +29,14 @@ Qt Quick 显示项按场景图后端自动选择导入路径：
 
 ## 可安装壁纸包（kpackage）
 
-构建时会在构建目录生成 `mirage-wallpaper-<版本>.zip`（Embed 变体为
-`mirage-wallpaper-<版本>-embed.zip`），这是标准的 Plasma/Wallpaper
-kpackage：`metadata.json` 位于压缩包根目录，`contents/ui/main.qml` 为主脚本。
+构建时会在构建目录生成自包含的 `mirage-wallpaper-<版本>.zip`：这是标准
+Plasma/Wallpaper kpackage，`metadata.json` 位于压缩包根目录，
+`contents/ui/main.qml` 为主脚本，原生 QML 模块随包内置在
+`contents/ui/MirageDisplayEmbed`，无需另行安装 QML 模块或系统库。
 安装到当前用户：
 
 ```sh
-kpackagetool6 -t Plasma/Wallpaper -i mirage-wallpaper-0.1.0.zip
+kpackagetool6 -t Plasma/Wallpaper -i build-kde/adapters/kde/mirage-wallpaper-0.1.0.zip
 ```
 
 卸载：

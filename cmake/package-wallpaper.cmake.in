@@ -9,24 +9,34 @@
 #   contents/ui/main.qml     (Plasma/Wallpaper "mainscript")
 #   contents/ui/...
 # plus a README.md describing the package.
+#
+# The package is self-contained: the native QML module is copied into
+# contents/ui/MirageDisplayEmbed and the surface component imports it with a
+# relative import, so `kpackagetool6 -i` works without a system-wide QML
+# module or library install.
 
 set(_stage "@_wallpaper_pkg_stage@")
 set(_archive "@_wallpaper_pkg_archive@")
-set(_embed @_wallpaper_pkg_embed@)
+set(_qml_module "@_wallpaper_pkg_qml_module@")
 
 file(REMOVE_RECURSE "${_stage}")
 file(MAKE_DIRECTORY "${_stage}")
 file(COPY "@CMAKE_CURRENT_SOURCE_DIR@/wallpaper/"
     DESTINATION "${_stage}")
 
-if(_embed)
-    # Embed variant: the QML module is shipped inside the package, so the
-    # surface component is the self-contained MirageSurfaceEmbed.qml.
-    file(REMOVE "${_stage}/contents/ui/MirageSurface.qml")
-    file(RENAME
-        "${_stage}/contents/ui/MirageSurfaceEmbed.qml"
-        "${_stage}/contents/ui/MirageSurface.qml")
+# Ship the native QML module inside the package. The surface component uses
+# the self-contained MirageSurfaceEmbed.qml with a relative import into
+# "MirageDisplayEmbed", so the package does not depend on any system-wide
+# QML module or on the mirage_display shared libraries.
+file(REMOVE "${_stage}/contents/ui/MirageSurface.qml")
+file(RENAME
+    "${_stage}/contents/ui/MirageSurfaceEmbed.qml"
+    "${_stage}/contents/ui/MirageSurface.qml")
+if(NOT EXISTS "${_qml_module}/qmldir")
+    message(FATAL_ERROR "QML module output not found: ${_qml_module}")
 endif()
+file(COPY "${_qml_module}/"
+    DESTINATION "${_stage}/contents/ui/MirageDisplayEmbed")
 
 get_filename_component(_parent "${_stage}" DIRECTORY)
 get_filename_component(_name "${_stage}" NAME)

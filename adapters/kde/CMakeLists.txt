@@ -1,25 +1,5 @@
 add_subdirectory(qml)
 
-install(DIRECTORY wallpaper/
-    DESTINATION ${CMAKE_INSTALL_DATADIR}/plasma/wallpapers/org.mirage.wallpaper)
-
-if(MIRAGE_DISPLAY_QML_URI MATCHES "Embed")
-    install(DIRECTORY wallpaper/
-        DESTINATION org.mirage.wallpaper
-        COMPONENT kde_extension
-        EXCLUDE_FROM_ALL
-        PATTERN "MirageSurface.qml" EXCLUDE
-        PATTERN "MirageSurfaceEmbed.qml" EXCLUDE)
-    install(FILES wallpaper/contents/ui/MirageSurfaceEmbed.qml
-        DESTINATION org.mirage.wallpaper/contents/ui
-        RENAME MirageSurface.qml
-        COMPONENT kde_extension
-        EXCLUDE_FROM_ALL)
-    list(APPEND CPACK_COMPONENTS_ALL kde_extension)
-    set(CPACK_ARCHIVE_KDE_EXTENSION_FILE_NAME
-        "mirage-kde-${PROJECT_VERSION}-${CMAKE_SYSTEM_PROCESSOR}-embed")
-endif()
-
 # ---------------------------------------------------------------------------
 # Installable Plasma/Wallpaper kpackage archive
 #
@@ -30,18 +10,20 @@ endif()
 # a different artifact from the CPack library distribution
 # (mirage-linux-display-<version>-Linux.zip), which kpackagetool6 cannot
 # consume.
+#
+# The kpackage is self-contained: the native QML module is copied into
+# contents/ui/MirageDisplayEmbed and the surface component imports it with a
+# relative import, so installing the ZIP with kpackagetool6 needs no
+# system-wide QML module or library install.
 # ---------------------------------------------------------------------------
 set(_wallpaper_pkg_name "org.mirage.wallpaper")
 set(_wallpaper_pkg_stage
     "${CMAKE_CURRENT_BINARY_DIR}/wallpaper-pkg/${_wallpaper_pkg_name}")
 set(_wallpaper_pkg_archive
     "${CMAKE_CURRENT_BINARY_DIR}/mirage-wallpaper-${PROJECT_VERSION}.zip")
-set(_wallpaper_pkg_embed OFF)
-if(MIRAGE_DISPLAY_QML_URI MATCHES "Embed")
-    set(_wallpaper_pkg_embed ON)
-    set(_wallpaper_pkg_archive
-        "${CMAKE_CURRENT_BINARY_DIR}/mirage-wallpaper-${PROJECT_VERSION}-embed.zip")
-endif()
+string(REPLACE "." "/" _wallpaper_qml_uri_path "${MIRAGE_DISPLAY_QML_URI}")
+set(_wallpaper_pkg_qml_module
+    "${CMAKE_CURRENT_BINARY_DIR}/qml/${_wallpaper_qml_uri_path}")
 
 set(_wallpaper_pkg_script
     "${CMAKE_CURRENT_BINARY_DIR}/package-wallpaper.cmake")
@@ -62,7 +44,21 @@ add_custom_command(
     DEPENDS
         "${_wallpaper_pkg_script}"
         ${_wallpaper_pkg_files}
-    COMMENT "Creating Plasma wallpaper package ${_wallpaper_pkg_archive}")
+        "$<TARGET_FILE:mirage-display-qml>"
+    COMMENT "Creating self-contained Plasma wallpaper package ${_wallpaper_pkg_archive}")
 
 add_custom_target(mirage-wallpaper-package ALL
     DEPENDS "${_wallpaper_pkg_archive}")
+
+# `cmake --install` installs the same self-contained layout as the kpackage
+# ZIP, so the user-level and system-wide installs behave identically. The QML
+# module itself is additionally installed into the Qt QML import path by
+# adapters/kde/qml/CMakeLists.txt for library consumers that import it.
+install(DIRECTORY "${_wallpaper_pkg_stage}/"
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/plasma/wallpapers/org.mirage.wallpaper)
+
+if(MIRAGE_DISPLAY_QML_URI MATCHES "Embed")
+    list(APPEND CPACK_COMPONENTS_ALL kde_extension)
+    set(CPACK_ARCHIVE_KDE_EXTENSION_FILE_NAME
+        "mirage-kde-${PROJECT_VERSION}-${CMAKE_SYSTEM_PROCESSOR}-embed")
+endif()

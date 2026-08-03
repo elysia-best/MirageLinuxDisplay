@@ -7,11 +7,12 @@ X11 与 Wayland 会话行为一致。
 
 ## 安装
 
-本 ZIP 即标准 KPackage 布局（`metadata.json` 位于压缩包根目录），可直接
-用 `kpackagetool6` 安装：
+本 ZIP 即标准 KPackage 布局（`metadata.json` 位于压缩包根目录），并且是
+自包含的：原生 QML 模块随包内置在 `contents/ui/MirageDisplayEmbed`，因此
+直接用 `kpackagetool6` 安装即可，无需另行安装 QML 模块或系统库：
 
 ```sh
-kpackagetool6 -t Plasma/Wallpaper -i mirage-wallpaper-0.1.0.zip
+kpackagetool6 -t Plasma/Wallpaper -i build-kde/adapters/kde/mirage-wallpaper-0.1.0.zip
 ```
 
 卸载：
@@ -39,8 +40,8 @@ cmake -S . -B build-kde -G Ninja \
 cmake --build build-kde
 ```
 
-构建完成后在 `build-kde/` 生成 `mirage-wallpaper-<版本>.zip`
-（Embed 变体为 `mirage-wallpaper-<版本>-embed.zip`）。
+构建完成后在 `build-kde/adapters/kde/` 生成自包含的
+`mirage-wallpaper-<版本>.zip`。
 
 > 注意：根目录 CPack 生成的 `mirage-linux-display-<版本>-Linux.zip` 是
 > 核心库发行包，不是壁纸包，不能用于 `kpackagetool6 -i`。

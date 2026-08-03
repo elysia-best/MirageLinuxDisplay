@@ -29,10 +29,13 @@ function(mirage_add_library target_name)
             PRIVATE ${ARG_PRIVATE_INCLUDE})
         target_compile_options(${target} PRIVATE
             -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror)
-        if(ARG_LINKS_SHARED)
-            target_link_libraries(${target} PUBLIC ${ARG_LINKS_SHARED})
-        endif()
     endforeach()
+    # The shared twin links the shared dependency set; the static twin links
+    # only static dependencies so it can be embedded in other binaries and
+    # shared modules without a runtime dependency on the shared libraries.
+    if(ARG_LINKS_SHARED)
+        target_link_libraries(${target_name} PUBLIC ${ARG_LINKS_SHARED})
+    endif()
     if(ARG_LINKS_STATIC)
         target_link_libraries(${target_name}_static PUBLIC ${ARG_LINKS_STATIC})
     endif()

@@ -66,10 +66,11 @@ cmake -S . -B build-kde -G Ninja \
 cmake --build build-kde
 ```
 
-壁纸包构建后会生成可直接安装的 kpackage：
+壁纸包构建后会生成自包含的 kpackage（原生 QML 模块随包内置，无需另行
+安装系统库或 QML 模块）：
 
 ```sh
-kpackagetool6 -t Plasma/Wallpaper -i build-kde/mirage-wallpaper-0.1.0.zip
+kpackagetool6 -t Plasma/Wallpaper -i build-kde/adapters/kde/mirage-wallpaper-0.1.0.zip
 ```
 
 安装（含 Plasma 壁纸包）：

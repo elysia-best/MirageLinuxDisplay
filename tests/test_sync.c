@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 
+#include "common/drm.h"
 #include "mirage_display.h"
 #include "sync_fanout.h"
 
@@ -13,51 +14,9 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
 #include <unistd.h>
-
-#ifndef DRM_IOCTL_BASE
-#define DRM_IOCTL_BASE 'd'
-#endif
-
-struct test_drm_syncobj_create {
-    uint32_t handle;
-    uint32_t flags;
-};
-
-struct test_drm_syncobj_destroy {
-    uint32_t handle;
-    uint32_t pad;
-};
-
-struct test_drm_syncobj_handle {
-    uint32_t handle;
-    uint32_t flags;
-    int32_t fd;
-    uint32_t pad;
-};
-
-struct test_drm_syncobj_wait {
-    uint64_t handles;
-    int64_t timeout_nsec;
-    uint32_t count_handles;
-    uint32_t flags;
-    uint32_t first_signaled;
-    uint32_t pad;
-    uint64_t deadline_nsec;
-};
-
-#define TEST_DRM_IOCTL_SYNCOBJ_CREATE \
-    _IOWR(DRM_IOCTL_BASE, 0xbf, struct test_drm_syncobj_create)
-#define TEST_DRM_IOCTL_SYNCOBJ_DESTROY \
-    _IOWR(DRM_IOCTL_BASE, 0xc0, struct test_drm_syncobj_destroy)
-#define TEST_DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD \
-    _IOWR(DRM_IOCTL_BASE, 0xc1, struct test_drm_syncobj_handle)
-#define TEST_DRM_IOCTL_SYNCOBJ_WAIT \
-    _IOWR(DRM_IOCTL_BASE, 0xc3, struct test_drm_syncobj_wait)
-#define TEST_DRM_SYNCOBJ_WAIT_ALL (UINT32_C(1) << 0)
 
 static void assert_closed(int fd) {
     errno = 0;
@@ -85,20 +44,20 @@ static void test_real_syncobj_fanout(void) {
         close(drm_fd);
         return;
     }
-    struct test_drm_syncobj_create create = {.handle = 0, .flags = 0};
-    if (ioctl(drm_fd, TEST_DRM_IOCTL_SYNCOBJ_CREATE, &create) != 0) {
+    struct md_drm_syncobj_create create = {.handle = 0, .flags = 0};
+    if (ioctl(drm_fd, MD_DRM_IOCTL_SYNCOBJ_CREATE, &create) != 0) {
         close(drm_fd);
         return;
     }
-    struct test_drm_syncobj_handle export_handle = {
+    struct md_drm_syncobj_handle export_handle = {
         .handle = create.handle,
         .flags = 0,
         .fd = -1,
         .pad = 0,
     };
-    if (ioctl(drm_fd, TEST_DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD, &export_handle) != 0) {
-        struct test_drm_syncobj_destroy destroy = {.handle = create.handle, .pad = 0};
-        (void)ioctl(drm_fd, TEST_DRM_IOCTL_SYNCOBJ_DESTROY, &destroy);
+    if (ioctl(drm_fd, MD_DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD, &export_handle) != 0) {
+        struct md_drm_syncobj_destroy destroy = {.handle = create.handle, .pad = 0};
+        (void)ioctl(drm_fd, MD_DRM_IOCTL_SYNCOBJ_DESTROY, &destroy);
         close(drm_fd);
         return;
     }
@@ -121,20 +80,20 @@ static void test_real_syncobj_fanout(void) {
     assert(md_sync_fanout_poll(fanout) == 1);
 
     uint32_t handles[1] = {create.handle};
-    struct test_drm_syncobj_wait wait = {
+    struct md_drm_syncobj_wait wait = {
         .handles = (uint64_t)(uintptr_t)handles,
         .timeout_nsec = 0,
         .count_handles = 1,
-        .flags = TEST_DRM_SYNCOBJ_WAIT_ALL,
+        .flags = MD_DRM_SYNCOBJ_WAIT_ALL,
         .first_signaled = 0,
         .pad = 0,
         .deadline_nsec = 0,
     };
-    assert(ioctl(drm_fd, TEST_DRM_IOCTL_SYNCOBJ_WAIT, &wait) == 0);
+    assert(ioctl(drm_fd, MD_DRM_IOCTL_SYNCOBJ_WAIT, &wait) == 0);
 
     md_sync_fanout_free(fanout);
-    struct test_drm_syncobj_destroy destroy = {.handle = create.handle, .pad = 0};
-    (void)ioctl(drm_fd, TEST_DRM_IOCTL_SYNCOBJ_DESTROY, &destroy);
+    struct md_drm_syncobj_destroy destroy = {.handle = create.handle, .pad = 0};
+    (void)ioctl(drm_fd, MD_DRM_IOCTL_SYNCOBJ_DESTROY, &destroy);
     close(drm_fd);
 }
 

@@ -573,3 +573,6 @@ int md_vk_importer_release_barrier(const md_vk_importer_t* importer,
                         importer != NULL ? importer->context.queue_family_index : 0,
                         VK_QUEUE_FAMILY_FOREIGN_EXT, out_barrier);
 }
+
+
+

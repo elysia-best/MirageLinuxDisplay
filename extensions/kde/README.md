@@ -3,14 +3,26 @@
 This adapter is a Plasma 6 wallpaper package. Plasma owns the surface on both
 X11 and Wayland; the plugin never creates or places an X11 window.
 
-Build and install the QML module and wallpaper package with:
+The build requires CMake 3.20, Ninja, Qt 6.5 or newer (Gui, Qml and Quick),
+pkg-config, and EGL/GLESv2 development packages. `kpackagetool6` is required
+for installation. Vulkan support is detected automatically.
+
+Build the standalone package from the repository root. The build directory is
+only a staging area; the build does not install libraries or QML modules into
+system paths. The embedded `Mirage.DisplayEmbed` module is included in the
+wallpaper ZIP:
 
 ```sh
-cmake -S . -B build-kde -G Ninja \
-  -DMIRAGE_DISPLAY_PLUGIN_QML=ON \
-  -DCMAKE_INSTALL_PREFIX=/usr
-cmake --build build-kde
-cmake --install build-kde
+cmake -S extensions/kde -B build-kde-package -G Ninja
+cmake --build build-kde-package --target package
+# build-kde-package/mirage-wallpaper-0.1.0.zip
+```
+
+Install it for the current user with KDE's package manager:
+
+```sh
+kpackagetool6 --type=Plasma/Wallpaper \
+  --install build-kde-package/mirage-wallpaper-0.1.0.zip
 ```
 
 The initial renderer path uses Qt Quick's OpenGL/EGL backend. Plasma X11 must

@@ -12,6 +12,16 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 include(GNUInstallDirs)
 
+option(MIRAGE_DISPLAY_ENABLE_INSTALL "Enable library and module install rules" ON)
+option(MIRAGE_DISPLAY_KDE_PACKAGE "Build the standalone KDE wallpaper package" OFF)
+
+if(MIRAGE_DISPLAY_KDE_PACKAGE)
+    set(MIRAGE_DISPLAY_ENABLE_INSTALL OFF)
+    set(MIRAGE_DISPLAY_PLUGIN_QML ON)
+    set(MIRAGE_DISPLAY_QML_URI "Mirage.DisplayEmbed" CACHE STRING
+        "QML module URI for the embedded KDE package" FORCE)
+endif()
+
 set(MIRAGE_DISPLAY_SOURCES
     src/codec.c
     src/protocol.c
@@ -39,17 +49,19 @@ set_target_properties(mirage_display PROPERTIES
     VERSION ${PROJECT_VERSION}
     SOVERSION ${PROJECT_VERSION_MAJOR})
 
-install(TARGETS mirage_display mirage_display_static
-    EXPORT MirageDisplayTargets
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
-install(FILES include/mirage_display.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-install(FILES include/mirage_display_producer.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-install(FILES include/mirage_display_broker.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-install(EXPORT MirageDisplayTargets
-    FILE MirageDisplayTargets.cmake
-    NAMESPACE Mirage::
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/MirageDisplay)
+if(MIRAGE_DISPLAY_ENABLE_INSTALL)
+    install(TARGETS mirage_display mirage_display_static
+        EXPORT MirageDisplayTargets
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+    install(FILES include/mirage_display.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    install(FILES include/mirage_display_producer.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    install(FILES include/mirage_display_broker.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    install(EXPORT MirageDisplayTargets
+        FILE MirageDisplayTargets.cmake
+        NAMESPACE Mirage::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/MirageDisplay)
+endif()
 
 find_package(Vulkan QUIET)
 option(MIRAGE_DISPLAY_WITH_VULKAN "Build the Vulkan DMA-BUF import helper" ${Vulkan_FOUND})
@@ -80,15 +92,17 @@ if(MIRAGE_DISPLAY_WITH_VULKAN)
     endforeach()
     target_link_libraries(mirage_display_vulkan PUBLIC mirage_display Vulkan::Vulkan)
     target_link_libraries(mirage_display_vulkan_static PUBLIC mirage_display_static Vulkan::Vulkan)
-    install(TARGETS mirage_display_vulkan mirage_display_vulkan_static
-        EXPORT MirageDisplayTargets
-        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
-    install(FILES
-        include/mirage_display_vulkan.h
-        include/mirage_display_vulkan_blit.h
-        include/mirage_display_vulkan_export.h
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    if(MIRAGE_DISPLAY_ENABLE_INSTALL)
+        install(TARGETS mirage_display_vulkan mirage_display_vulkan_static
+            EXPORT MirageDisplayTargets
+            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+        install(FILES
+            include/mirage_display_vulkan.h
+            include/mirage_display_vulkan_blit.h
+            include/mirage_display_vulkan_export.h
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    endif()
 endif()
 
 find_package(PkgConfig QUIET)
@@ -123,11 +137,13 @@ if(MIRAGE_DISPLAY_WITH_EGL)
         mirage_display PkgConfig::EGL PkgConfig::GLESV2)
     target_link_libraries(mirage_display_egl_static PUBLIC
         mirage_display_static PkgConfig::EGL PkgConfig::GLESV2)
-    install(TARGETS mirage_display_egl mirage_display_egl_static
-        EXPORT MirageDisplayTargets
-        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
-    install(FILES include/mirage_display_egl.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    if(MIRAGE_DISPLAY_ENABLE_INSTALL)
+        install(TARGETS mirage_display_egl mirage_display_egl_static
+            EXPORT MirageDisplayTargets
+            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+        install(FILES include/mirage_display_egl.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    endif()
 endif()
 
 option(MIRAGE_DISPLAY_BUILD_TESTS "Build protocol and session tests" ON)
@@ -205,10 +221,25 @@ if(MIRAGE_DISPLAY_PLUGIN_QML)
         message(FATAL_ERROR "MIRAGE_DISPLAY_PLUGIN_QML requires MIRAGE_DISPLAY_WITH_EGL=ON")
     endif()
     add_subdirectory(plugins/qml)
-    install(DIRECTORY extensions/kde/package/
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/plasma/wallpapers/org.mirage.wallpaper)
+    if(MIRAGE_DISPLAY_ENABLE_INSTALL)
+        install(DIRECTORY extensions/kde/package/
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/plasma/wallpapers/org.mirage.wallpaper)
+    endif()
 
-    if(MIRAGE_DISPLAY_QML_URI MATCHES "Embed")
+    set(_mirage_kde_embed_package OFF)
+    if(MIRAGE_DISPLAY_KDE_PACKAGE)
+        set(_mirage_kde_embed_package ON)
+    elseif(MIRAGE_DISPLAY_ENABLE_INSTALL)
+        if(MIRAGE_DISPLAY_QML_URI MATCHES "Embed")
+            set(_mirage_kde_embed_package ON)
+        endif()
+    endif()
+
+    if(_mirage_kde_embed_package)
+        if(NOT MIRAGE_DISPLAY_QML_URI MATCHES "Embed")
+            message(FATAL_ERROR
+                "KDE package requires an embedded QML module URI")
+        endif()
         install(DIRECTORY extensions/kde/package/
             DESTINATION org.mirage.wallpaper
             COMPONENT kde_extension
@@ -220,15 +251,25 @@ if(MIRAGE_DISPLAY_PLUGIN_QML)
             RENAME MirageSurface.qml
             COMPONENT kde_extension
             EXCLUDE_FROM_ALL)
+        install(DIRECTORY ${MIRAGE_DISPLAY_QML_OUTPUT_DIR}/
+            DESTINATION org.mirage.wallpaper/contents/ui/MirageDisplayEmbed
+            COMPONENT kde_extension
+            EXCLUDE_FROM_ALL)
         list(APPEND CPACK_COMPONENTS_ALL kde_extension)
         set(CPACK_ARCHIVE_KDE_EXTENSION_FILE_NAME
-            "mirage-kde-${PROJECT_VERSION}-${CMAKE_SYSTEM_PROCESSOR}-embed")
+            "mirage-wallpaper-${PROJECT_VERSION}")
     endif()
 endif()
 
-set(CPACK_GENERATOR "ZIP")
-set(CPACK_PACKAGE_NAME "mirage-linux-display")
-set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
-set(CPACK_ARCHIVE_COMPONENT_INSTALL ON)
-set(CPACK_PACKAGING_INSTALL_PREFIX "")
-include(CPack)
+if(MIRAGE_DISPLAY_ENABLE_INSTALL OR MIRAGE_DISPLAY_KDE_PACKAGE)
+    set(CPACK_GENERATOR "ZIP")
+    if(MIRAGE_DISPLAY_KDE_PACKAGE OR _mirage_kde_embed_package)
+        set(CPACK_PACKAGE_NAME "mirage-wallpaper")
+    else()
+        set(CPACK_PACKAGE_NAME "mirage-linux-display")
+    endif()
+    set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+    set(CPACK_ARCHIVE_COMPONENT_INSTALL ON)
+    set(CPACK_PACKAGING_INSTALL_PREFIX "")
+    include(CPack)
+endif()

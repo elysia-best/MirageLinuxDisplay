@@ -33,15 +33,9 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-To build the Plasma 6 adapter and wallpaper package, enable the optional QML
-target (it currently uses Qt Quick OpenGL/EGL for DMA-BUF import):
-
-```sh
-cmake -S . -B build-kde -G Ninja \
-  -DMIRAGE_DISPLAY_PLUGIN_QML=ON \
-  -DMIRAGE_DISPLAY_WITH_EGL=ON
-cmake --build build-kde
-```
+The KDE Plasma 6 wallpaper is a separate, self-contained package. See
+`extensions/kde/README.md` for its standalone build, ZIP packaging, and Plasma
+installation workflow; it never installs the core libraries into the system.
 
 The Vulkan DMA-BUF helper is built automatically when Vulkan headers and the
 loader are available. Disable it with `-DMIRAGE_DISPLAY_WITH_VULKAN=OFF`.

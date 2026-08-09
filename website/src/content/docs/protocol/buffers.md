@@ -54,12 +54,12 @@ u64 sequence
 
 恰好携带两个 FD：
 
-1. acquire `sync_file`：生产者写入完成后被信号。
-2. 二进制 release DRM syncobj FD：初始未信号。
+1. acquire `sync_file`：生产者在写完帧后将其置位。
+2. 二进制 release DRM syncobj FD：初始处于未置位状态。
 
-两个描述符的所有权转移给帧回调。消费者在采样前等待 acquire 描述符，在最后一次 GPU 读取后信号 release syncobj。关闭尚未信号的 release 描述符属于异常回退，可能导致生产者在该槽位上超时。
+两个描述符的所有权转移给帧回调。消费者在采样前等待 acquire 描述符，在最后一次 GPU 读取后置位 release syncobj。关闭尚未置位的 release 描述符属于异常回退，可能导致生产者在该槽位上超时。
 
-对于 Vulkan 对端，版本 1 固定跨进程图像状态为 `VK_IMAGE_LAYOUT_GENERAL`。发布帧前，生产者把队列族所有权释放到 `VK_QUEUE_FAMILY_FOREIGN_EXT`；Vulkan 消费者在首次读取前从 `VK_QUEUE_FAMILY_FOREIGN_EXT` 获取，并在信号 release 信号量之前释放回该族。这些是协议不变量，不会在每帧报文中重复。
+对于 Vulkan 对端，版本 1 固定跨进程图像状态为 `VK_IMAGE_LAYOUT_GENERAL`。发布帧前，生产者把队列族所有权释放到 `VK_QUEUE_FAMILY_FOREIGN_EXT`；Vulkan 消费者在首次读取前从 `VK_QUEUE_FAMILY_FOREIGN_EXT` 获取，并在置位 release 信号量之前释放回该族。这些是协议不变量，不会在每帧报文中重复。
 
 非当前绑定代际的帧会被直接关闭并丢弃，不会触发帧回调。
 

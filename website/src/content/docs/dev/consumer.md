@@ -83,7 +83,7 @@ md_display_send_window_state(d, flags);
 ## 同步辅助
 
 ```c
-md_display_signal_release_syncobj(release_syncobj_fd);  /* CPU 回退：信号 release syncobj */
+md_display_signal_release_syncobj(release_syncobj_fd);  /* CPU 回退：置位 release syncobj */
 md_display_release_after_sync_file(release_syncobj_fd, sync_file_fd); /* 连接二者 */
 ```
 

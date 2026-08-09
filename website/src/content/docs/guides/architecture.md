@@ -60,7 +60,7 @@ broker 只转发协议报文与文件描述符。像素数据留在 GPU 显存�
 3. broker 为同一稳定标识建立路由，取格式交集协商，向生产者下发 `OUTPUT_CONFIG`。
 4. 生产者创建带代际编号的缓冲池并发送 `OFFER_BUFFERS`（DMA-BUF FD 随报文送达）。
 5. broker 向已绑定且兼容的每个显示端转发 `BIND_BUFFERS`；帧提交经 `PRODUCER_FRAME` → `FRAME_READY` 转发，携带 acquire sync_file 与 release syncobj，多显示端时用 syncobj 扇出保证每个消费者独立释放。
-6. 显示端采样完成后信号 release syncobj；全部显示端解绑（`UNBIND` → `UNBIND_DONE`）后，broker 才允许生产者退役该代际并创建新代际。
+6. 显示端采样完成后置位 release syncobj；全部显示端解绑（`UNBIND` → `UNBIND_DONE`）后，broker 才允许生产者退役该代际并创建新代际。
 7. 显示端通过 `POINTER_*` 与 `WINDOW_STATE` 回传输入与窗口事实，broker 以对应的 producer 侧报文转发给渲染器。
 
 ## 协议不变量

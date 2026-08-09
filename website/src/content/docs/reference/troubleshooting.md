@@ -34,7 +34,7 @@ description: 构建、连接、GPU 与桌面环境的常见问题与排查路径
 
 **同步描述符泄露或重复关闭？**
 
-帧的 acquire sync_file 与 release syncobj FD 的所有权转移给帧回调，每条路径都必须恰好关闭一次；关闭尚未信号的 release 描述符属于异常回退，可能导致生产者在该槽位上超时。详见[缓冲池与帧](/protocol/buffers/)。
+帧的 acquire sync_file 与 release syncobj FD 的所有权转移给帧回调，每条路径都必须恰好关闭一次；关闭尚未置位的 release 描述符属于异常回退，可能导致生产者在该槽位上超时。详见[缓冲池与帧](/protocol/buffers/)。
 
 ## 桌面环境问题
 

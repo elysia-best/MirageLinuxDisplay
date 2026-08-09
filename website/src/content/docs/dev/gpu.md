@@ -25,7 +25,7 @@ external memory FD / DRM 修饰符导入：
 
 - `md_vk_importer_new(&ctx)`：使用已创建的 instance/device，`image_usage` 由调用方指定。
 - `md_vk_importer_import_pool`：为每个平面绑定 `VkDeviceMemory`，创建 `VkImage`/`VkImageView`；NV12 等格式还会创建 `VkSamplerYcbcrConversion`。
-- `md_vk_import_acquire_sync` / `md_vk_import_release_syncobj`：导入并消费帧同步 FD，返回可提交的信号量（acquire 是临时导入，release 是二进制信号量，必须在最终读提交中信号）。
+- `md_vk_import_acquire_sync` / `md_vk_import_release_syncobj`：导入并消费帧同步 FD，返回可提交的信号量（acquire 是临时导入，release 是二进制信号量，必须在最终读提交中置位）。
 - `md_vk_importer_acquire_barrier` / `release_barrier`：协议 v1 要求的 `VK_IMAGE_LAYOUT_GENERAL` 队列族所有权屏障。
 - `md_vk_fourcc_to_format` / `md_vk_query_format_caps`：fourcc 映射与 DRM 修饰符能力枚举（`caps=NULL, capacity=0` 时只查询数量）。
 - `md_vk_result_string`：把 `VkResult` 转成可读字符串。
@@ -40,7 +40,7 @@ md_vk_blitter_blit(bl, pool, buffer_index, acquire_semaphore, release_semaphore)
 /* 之后用 md_vk_blitter_image/layout/format/width/height 采样宿主图像 */
 ```
 
-blit 会等待 acquire 信号量，在导入图像释放回 `VK_QUEUE_FAMILY_FOREIGN_EXT` 后信号 release 信号量，并在返回前等待完成；信号量仍归 importer 所有。
+blit 会等待 acquire 信号量，在导入图像释放回 `VK_QUEUE_FAMILY_FOREIGN_EXT` 后置位 release 信号量，并在返回前等待完成；信号量仍归 importer 所有。
 
 ### 导出（`mirage_display_vulkan_export.h`）
 
@@ -56,7 +56,7 @@ md_vk_exporter_cancel_frame(ex, index);                  /* 提交失败后回�
 ```
 
 - `md_vk_exporter_acquire` 返回 `MD_ERR_WOULD_BLOCK` 表示所有槽位仍被消费者持有；槽位在 release 之前绝不复用。
-- `export_frame` 把已信号的二进制信号量导出为 sync_file，并新建未信号的二进制 DRM syncobj；两个 FD 归调用方所有，用于 `md_producer_submit_frame()`。
+- `export_frame` 把已置位的二进制信号量导出为 sync_file，并新建处于未置位状态的二进制 DRM syncobj；两个 FD 归调用方所有，用于 `md_producer_submit_frame()`。
 - 借用的描述符与 image view 在池替换之前一直有效。
 
 ## 相关

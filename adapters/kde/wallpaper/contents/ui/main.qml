@@ -4,6 +4,11 @@ import org.kde.plasma.plasmoid
 WallpaperItem {
     id: root
     property bool initialized: false
+    // WallpaperItem creates configuration after the package component is
+    // constructed.  Do not instantiate the native display item until that
+    // object exists; this avoids transient null bindings during package
+    // installation and wallpaper replacement.
+    readonly property bool configurationReady: root.configuration !== null
 
     Rectangle {
         anchors.fill: parent
@@ -22,7 +27,7 @@ WallpaperItem {
         id: surfaceLoader
         anchors.fill: parent
         asynchronous: false
-        active: root.initialized
+        active: root.initialized && root.configurationReady
         source: "MirageSurface.qml"
         onLoaded: {
             item.configuredDisplayName = Qt.binding(function() {
@@ -44,7 +49,8 @@ WallpaperItem {
         anchors.left: parent.left
         anchors.top: parent.top
         anchors.margins: 8
-        visible: root.configuration.ShowDiagnostics && surfaceLoader.status === Loader.Ready
+        visible: root.configurationReady && root.configuration.ShowDiagnostics
+            && surfaceLoader.status === Loader.Ready
         color: Qt.rgba(0, 0, 0, 0.62)
         radius: 4
         width: diagnostics.implicitWidth + 16

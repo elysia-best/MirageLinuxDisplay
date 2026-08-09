@@ -89,7 +89,7 @@ ctest --test-dir build --output-on-failure
 
 Vulkan 与 EGL 助手在检测到相应开发环境时自动构建；可用 `-DMIRAGE_DISPLAY_WITH_VULKAN=OFF` / `-DMIRAGE_DISPLAY_WITH_EGL=OFF` 关闭。
 
-KDE Plasma 壁纸包单独由 `mirage-wallpaper-package` 目标构建。使用新的构建目录可避免复用旧的根工程缓存；构建阶段只生成 ZIP，不会把核心库或 QML 模块写入系统路径：
+KDE Plasma 壁纸包单独由 `mirage-wallpaper-package` 目标构建。
 
 ```sh
 cmake -S . -B build-kde-package -G Ninja \

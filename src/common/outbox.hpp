@@ -10,6 +10,14 @@
 #include <deque>
 #include <vector>
 
+/*
+ * Session-owned FIFO of already encoded SCM_RIGHTS messages.
+ *
+ * std::deque keeps queued descriptor ownership stable across flushes while
+ * std::vector stores the exact encoded bytes; send_or_queue transfers descriptor
+ * ownership on every return path.
+ */
+
 inline constexpr std::size_t MD_OUTBOX_LIMIT = 64U;
 
 /*

@@ -18,6 +18,12 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+/*
+ * Mock mirage-display-v1 broker: exercises the codec and protocol encoders to
+ * serve WELCOME/BIND_BUFFERS/FRAME_READY to a real consumer, for protocol
+ * simulation and tests.
+ */
+
 static md_packet_t receive_packet(int fd) {
     md_packet_t packet;
     for (;;) {

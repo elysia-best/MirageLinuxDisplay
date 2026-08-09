@@ -6,6 +6,13 @@
 #include <new>
 #include <unistd.h>
 
+/*
+ * Implementation of UniqueFd and the descriptor-array helpers.
+ *
+ * close(2) errors are not retriable after ownership ends, so the destructor and
+ * array closers only provide the POSIX best-effort guarantee.
+ */
+
 namespace mirage {
 
 UniqueFd::UniqueFd(const std::int32_t fd) noexcept : fd_(fd) {}

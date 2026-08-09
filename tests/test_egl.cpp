@@ -7,6 +7,10 @@
 #endif
 #include <assert.h>
 
+/*
+ * Unit tests for the EGL DMA-BUF importer and native fence helpers.
+ */
+
 int main(void) {
     md_egl_context_t context = {
         .display = EGL_NO_DISPLAY,

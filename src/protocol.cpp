@@ -11,6 +11,14 @@
 #include <span>
 #include <string_view>
 
+/*
+ * Per-message encode/decode for mirage-display-v1.
+ *
+ * This is the single place where a protocol field maps to its wire type, so the
+ * golden-vector tests pin every field order and width here.  Decoders reject
+ * trailing bytes and out-of-range counts rather than tolerating them.
+ */
+
 namespace {
 
 inline constexpr std::uint32_t kMaxStringBytes = 4096U;
@@ -104,6 +112,12 @@ std::int32_t read_rect(md_reader_t* const reader, md_rect_t* const rect) {
 
 }  // namespace
 
+
+/*
+ * Writer primitives below encode every wire type into the caller-provided
+ * buffer.  All values are little-endian; f32 uses the IEEE-754 bit pattern.
+ * Writes that would overflow the buffer return -ENOSPC without partial output.
+ */
 void md_writer_init(md_writer_t* const writer, std::uint8_t* const data,
                     const std::size_t capacity) {
     if (writer == nullptr) {
@@ -184,6 +198,12 @@ std::int32_t md_write_string(md_writer_t* const writer, const char* const value)
     return md_write_bytes(writer, text.data(), text.size());
 }
 
+
+/*
+ * Reader primitives below consume the packet payload sequentially without
+ * allocating.  Any read that would run past the end of the buffer returns
+ * -EPROTO, so a malformed packet can never make a decoder read out of bounds.
+ */
 void md_reader_init(md_reader_t* const reader, const std::uint8_t* const data,
                     const std::size_t size) {
     if (reader == nullptr) {
@@ -278,6 +298,13 @@ std::int32_t md_reader_finish(const md_reader_t* const reader) {
     return reader != nullptr && reader->offset == reader->size ? 0 : -EPROTO;
 }
 
+
+/*
+ * Per-message encoders below mirror the XML protocol definition field for
+ * field; the golden-vector tests pin each order and width.  Registration and caps
+ * messages take borrowed caller structs, while input messages take their
+ * individual values.
+ */
 std::int32_t md_proto_encode_hello(md_writer_t* const writer, const std::uint32_t role,
                                    const char* const name, const char* const version,
                                    const std::uint64_t features) {
@@ -572,6 +599,12 @@ std::int32_t md_proto_encode_config(md_writer_t* const writer,
     return 0;
 }
 
+
+/*
+ * Per-message decoders below allocate only for variable-length strings (and
+ * always pair with the matching md_proto_*_clear helper).  A decoder that fails
+ * midway reports -EPROTO; callers treat that as a fatal protocol error.
+ */
 std::int32_t md_proto_decode_welcome(const std::uint8_t* const data, const std::size_t size,
                                      md_proto_welcome_t* const welcome) {
     if (welcome == nullptr) {

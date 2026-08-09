@@ -33,6 +33,15 @@
 #include <time.h>
 #include <unistd.h>
 
+/*
+ * Implementation of MirageDisplayItem.
+ *
+ * The EGL/Vulkan import paths are selected per scene-graph backend.  Pool
+ * replacement crosses from the protocol event thread into the render thread via
+ * md_display_defer_unbind, and the event filter returns false so Plasma keeps
+ * desktop clicks, context menus, drag-and-drop, and wheel events.
+ */
+
 namespace {
 
 constexpr uint32_t fourcc(char a, char b, char c, char d) {
@@ -66,6 +75,12 @@ uint32_t positiveU32(int value, uint32_t fallback) {
 
 } // namespace
 
+
+/*
+ * Sets up the reconnect/output-update timers, derives the default broker
+ * socket path from $XDG_RUNTIME_DIR, and wires the pointer forwarder sink so Qt
+ * pointer events reach the display session.
+ */
 MirageDisplayItem::MirageDisplayItem(QQuickItem* parent): QQuickItem(parent) {
     setFlag(ItemHasContents, true);
 
@@ -102,6 +117,14 @@ void MirageDisplayItem::componentComplete() {
     if (window()) handleWindowChanged(window());
 }
 
+
+/*
+ * Tracks the owning QQuickWindow: installs the pointer event filter, requests
+ * the Vulkan device extensions the importer needs before the scene graph
+ * initializes, and connects the scene-graph lifecycle signals (render-thread
+ * jobs are executed with DirectConnection because they must run on the render
+ * thread).
+ */
 void MirageDisplayItem::handleWindowChanged(QQuickWindow* quickWindow) {
     if (m_filteredWindow && m_filteredWindow != quickWindow) {
         m_filteredWindow->removeEventFilter(this);
@@ -149,6 +172,12 @@ void MirageDisplayItem::handleWindowChanged(QQuickWindow* quickWindow) {
     }
 }
 
+
+/*
+ * Selects the import backend from the Qt Quick graphics API once the scene
+ * graph is initialized, then starts the broker connection on the main thread.
+ * Called from the render thread via BeforeSynchronizingStage.
+ */
 void MirageDisplayItem::initializeRenderer() {
     if (m_rendererReady.load()) return;
     if (window() == nullptr || window()->rendererInterface() == nullptr) return;
@@ -173,6 +202,13 @@ void MirageDisplayItem::initializeRenderer() {
     QMetaObject::invokeMethod(this, &MirageDisplayItem::startConnection, Qt::QueuedConnection);
 }
 
+
+/*
+ * Creates the EGL importer from the current QOpenGLContext and resolves
+ * glEGLImageTargetTexture2DOES through the EGL loader (it is not an exported
+ * linkable symbol).  Fails fast with a diagnostic when the extension is
+ * missing.
+ */
 bool MirageDisplayItem::initializeOpenGLRenderer() {
     QOpenGLContext* context = QOpenGLContext::currentContext();
     if (context == nullptr) {
@@ -211,6 +247,12 @@ bool MirageDisplayItem::initializeOpenGLRenderer() {
 }
 
 #ifdef MIRAGE_DISPLAY_QML_WITH_VULKAN
+
+/*
+ * Creates the Vulkan importer and blitter from Qt Quick's device resources,
+ * reads the device/driver UUIDs and DRM render node from the physical device,
+ * and enumerates importable RGB modifiers to advertise as consumer caps.
+ */
 bool MirageDisplayItem::initializeVulkanRenderer() {
     QVulkanInstance* qtInstance = window()->vulkanInstance();
     QSGRendererInterface* renderer = window()->rendererInterface();
@@ -432,6 +474,11 @@ void MirageDisplayItem::setOutputTransform(OutputTransform value) {
     m_outputUpdateTimer.start();
 }
 
+
+/*
+ * Enables or disables pointer forwarding; disabling releases the current
+ * pointer state (enter/leave) so the renderer does not keep a stale cursor.
+ */
 void MirageDisplayItem::setPointerForwarding(bool value) {
     if (m_pointerForwarding == value) return;
     if (!value) releasePointerState(monotonicTimestampUs());
@@ -440,6 +487,12 @@ void MirageDisplayItem::setPointerForwarding(bool value) {
     m_outputUpdateTimer.start();
 }
 
+
+/*
+ * Forwards the DE-computed window-state flags to the broker immediately when
+ * the session is READY; the value is also cached so it can be replayed after a
+ * reconnect.
+ */
 void MirageDisplayItem::setWindowStateFlags(quint32 value) {
     if (m_windowStateFlags == value) return;
     m_windowStateFlags = value;
@@ -480,6 +533,13 @@ void MirageDisplayItem::setImportedGeneration(uint64_t generation) {
     }
 }
 
+
+/*
+ * Derives the stable output identity from QScreen/Qt properties: the
+ * stable_id is the trimmed configured value (falling back to kde:unknown), the
+ * refresh rate prefers the QScreen value, and input_caps reflects whether pointer
+ * forwarding is enabled.  The returned struct borrows the byte arrays.
+ */
 md_output_info_t MirageDisplayItem::makeOutputInfo(QByteArray& stableId, QByteArray& name) const {
     stableId = m_outputStableId.trimmed().toUtf8();
     name = m_outputName.trimmed().toUtf8();
@@ -515,6 +575,12 @@ md_output_info_t MirageDisplayItem::makeOutputInfo(QByteArray& stableId, QByteAr
     };
 }
 
+
+/*
+ * Creates the display session, advertises the backend-specific formats and
+ * feature bits, and starts a nonblocking connection with QSocketNotifier-driven
+ * handshake.  Any failure closes the session and schedules a reconnect.
+ */
 void MirageDisplayItem::startConnection() {
     if (!isComponentComplete() || !m_rendererReady.load() || m_display != nullptr ||
         m_socketPath.isEmpty()) {
@@ -607,6 +673,11 @@ void MirageDisplayItem::startConnection() {
     advanceHandshake();
 }
 
+
+/*
+ * Drives the nonblocking handshake from socket-notifier events; once READY,
+ * re-wires the notifiers to dispatch/flush and replays the cached window state.
+ */
 void MirageDisplayItem::advanceHandshake() {
     if (m_display == nullptr) return;
     for (int iteration = 0; iteration < 16; ++iteration) {
@@ -637,6 +708,11 @@ void MirageDisplayItem::advanceHandshake() {
     handleConnectionFailure();
 }
 
+
+/*
+ * Main-thread packet dispatch: drains readable packets, then re-arms the
+ * write notifier if the outbox has pending messages.
+ */
 void MirageDisplayItem::dispatchSocket() {
     if (m_display == nullptr) return;
     int result = md_display_dispatch(m_display);
@@ -673,6 +749,11 @@ void MirageDisplayItem::pushOutputUpdate() {
     armWritable();
 }
 
+
+/*
+ * Completes a deferred UNBIND on the protocol event thread after the render
+ * thread has destroyed GPU references (see onBuffersReleasing / updatePaintNode).
+ */
 void MirageDisplayItem::finishDeferredUnbind(qulonglong generation) {
     if (m_display == nullptr || generation == 0) return;
     if (md_display_finish_unbind(m_display, static_cast<uint64_t>(generation)) == MD_OK) {
@@ -680,6 +761,11 @@ void MirageDisplayItem::finishDeferredUnbind(qulonglong generation) {
     }
 }
 
+
+/*
+ * Tears down the session: releases pointer state, deletes socket notifiers,
+ * frees the display, and resets the connected/output Q_PROPERTY state.
+ */
 void MirageDisplayItem::closeConnection() {
     releasePointerState(monotonicTimestampUs());
     if (m_readNotifier != nullptr) {
@@ -715,6 +801,13 @@ void MirageDisplayItem::scheduleReconnect() {
     }
 }
 
+
+/*
+ * Protocol callbacks below run on the Qt main thread; they copy callback
+ * payloads into members guarded by m_stateMutex and call update() so the render
+ * thread picks them up on the next scene-graph pass.  Frame/release descriptors
+ * are owned by the callback path and consumed exactly once.
+ */
 void MirageDisplayItem::onConnected(void* userData, uint64_t outputIdValue) {
     auto* self = static_cast<MirageDisplayItem*>(userData);
     self->m_connected = true;
@@ -734,6 +827,12 @@ void MirageDisplayItem::onBuffersReady(void* userData, const md_buffer_pool_t* p
     self->update();
 }
 
+
+/*
+ * Broker requested UNBIND.  Defers the unbind so the render thread can destroy
+ * its GPU references, records the generation, and requests a repaint; the render
+ * thread later calls finishDeferredUnbind on the event thread.
+ */
 void MirageDisplayItem::onBuffersReleasing(void* userData, const md_buffer_pool_t* pool) {
     auto* self = static_cast<MirageDisplayItem*>(userData);
     bool deferred = self->m_display != nullptr &&
@@ -763,6 +862,11 @@ void MirageDisplayItem::onConfig(void* userData, const md_display_config_t* conf
     self->update();
 }
 
+
+/*
+ * Releases a frame that will not be sampled: closes the acquire sync_file and
+ * signals the release syncobj so the producer's slot is never blocked.
+ */
 void MirageDisplayItem::dropFrame(PendingFrame& frame) {
     if (!frame.valid) return;
     if (frame.value.acquire_sync_fd >= 0) close(frame.value.acquire_sync_fd);
@@ -812,6 +916,12 @@ void MirageDisplayItem::onDisconnected(void* userData, md_result_t reason, const
     }, Qt::QueuedConnection);
 }
 
+
+/*
+ * Imports the current pool on the render thread: Vulkan imports through the
+ * importer, EGL creates one GL texture per EGLImage and wraps them as QSGTexture.
+ * Runs with the OpenGL context current.
+ */
 bool MirageDisplayItem::importPendingPool(const md_buffer_pool_t& pool) {
 #ifdef MIRAGE_DISPLAY_QML_WITH_VULKAN
     if (m_rendererBackend.load() == BackendVulkan) {
@@ -866,6 +976,12 @@ bool MirageDisplayItem::importPendingPool(const md_buffer_pool_t& pool) {
     return true;
 }
 
+
+/*
+ * Releases the current pool's GPU resources on the render thread: finishes
+ * outstanding GL work, signals the release syncobj for the sampled frame, deletes
+ * textures and importer images, and resets the imported generation.
+ */
 void MirageDisplayItem::releaseRenderPool() {
     if (m_activeReleaseFd >= 0) {
         if (QOpenGLContext::currentContext() != nullptr) {
@@ -897,6 +1013,11 @@ void MirageDisplayItem::releaseRenderPool() {
     m_currentBuffer = -1;
 }
 
+
+/*
+ * After each frame is presented, attaches a fence from the current GL context
+ * to the release syncobj so the producer can recycle the sampled buffer.
+ */
 void MirageDisplayItem::releaseAfterRendering() {
     if (m_activeReleaseFd < 0) return;
     int releaseFd = m_activeReleaseFd;
@@ -907,6 +1028,13 @@ void MirageDisplayItem::releaseAfterRendering() {
     }
 }
 
+
+/*
+ * Builds the scene-graph node on the render thread: first completes any pending
+ * pool release (and deferred unbind), then imports a pending pool, samples the
+ * latest frame with backend-specific sync handling, and applies the configured
+ * transform.
+ */
 QSGNode* MirageDisplayItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData* data) {
     Q_UNUSED(data);
 
@@ -1156,6 +1284,11 @@ QSGNode* MirageDisplayItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeDat
     return transformNode;
 }
 
+
+/*
+ * Monotonic microsecond timestamp used by all pointer messages, matching the
+ * protocol's clock requirement.
+ */
 uint64_t MirageDisplayItem::monotonicTimestampUs() {
     struct timespec value {};
     if (clock_gettime(CLOCK_MONOTONIC, &value) != 0) return 0;
@@ -1167,6 +1300,11 @@ void MirageDisplayItem::releasePointerState(uint64_t timestamp) {
     m_pointer.reset(timestamp);
 }
 
+
+/*
+ * Maps a normalized pointer-forwarder event to the matching md_display_send_*
+ * call when the session is READY, then re-arms the write notifier.
+ */
 void MirageDisplayItem::forwardPointerEvent(const MiragePointerForwarder::Event& event) {
     if (m_display == nullptr || md_display_connection_state(m_display) != MD_CONNECTION_READY) {
         return;
@@ -1196,6 +1334,13 @@ void MirageDisplayItem::forwardPointerEvent(const MiragePointerForwarder::Event&
     armWritable();
 }
 
+
+/*
+ * Observes pointer events on the window and feeds them to the forwarder.
+ * Always returns false so Plasma keeps desktop clicks, context menus,
+ * drag-and-drop, and wheel events; drag is reconstructed from motion plus button
+ * state.
+ */
 bool MirageDisplayItem::eventFilter(QObject* watched, QEvent* event) {
     if (!m_pointerForwarding || watched != window() || m_display == nullptr ||
         md_display_connection_state(m_display) != MD_CONNECTION_READY) {

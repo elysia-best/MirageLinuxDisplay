@@ -7,6 +7,10 @@
 #include <sys/un.h>
 
 /*
+ * AF_UNIX address encoding for pathname and @-prefixed abstract sockets.
+ */
+
+/*
  * Encodes an explicitly NUL-terminated filesystem path or an @-prefixed
  * abstract AF_UNIX name into caller-owned sockaddr_un storage.
  */

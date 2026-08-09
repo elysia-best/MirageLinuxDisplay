@@ -5,6 +5,14 @@
 
 #include <stdint.h>
 
+/*
+ * C ABI for the broker-side DRM syncobj fanout.
+ *
+ * The original syncobj descriptor is borrowed by create; on MD_OK each child
+ * descriptor transfers to the caller and out_fanout owns the fanout until
+ * md_sync_fanout_free.  Restricted to the broker dispatch thread.
+ */
+
 #ifdef __cplusplus
 extern "C" {
 #endif

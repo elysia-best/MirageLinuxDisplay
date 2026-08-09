@@ -14,6 +14,11 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+/*
+ * Unit tests for the packet codec: header layout, magic, SCM_RIGHTS descriptor
+ * accounting, and short/long packet rejection.
+ */
+
 static void test_round_trip_with_fd(void) {
     int sockets[2];
     assert(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets) == 0);

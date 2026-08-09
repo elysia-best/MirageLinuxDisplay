@@ -27,6 +27,17 @@
 #include <unistd.h>
 #include <vector>
 
+/*
+ * Broker routing core (include/mirage_display_broker.h): binds the 0600 AF_UNIX
+ * SOCK_SEQPACKET endpoint, validates peers with SO_PEERCRED, routes one producer
+ * to many display consumers per stable output id, negotiates format/modifier
+ * intersections, and fans out DMA-BUF and sync descriptors without touching
+ * pixel data.
+ *
+ * Threading: a single dispatch thread owns every peer and route; the sync fanout
+ * state is not internally synchronized and must be used from that thread only.
+ */
+
 namespace {
 
 constexpr uint32_t kBrokerMaxPeers = 32U;
@@ -305,6 +316,11 @@ static md_broker_route_t* create_route(md_broker_t* broker, const char* stable_i
     return nullptr;
 }
 
+
+/*
+ * Queues one outbound message with the peer's monotonically increasing serial;
+ * descriptor ownership transfers to the outbox on every path.
+ */
 static int queue_peer(md_broker_peer_t* peer, uint16_t opcode, uint16_t flags,
                       const uint8_t* payload, size_t payload_size, int* fds, size_t fd_count);
 
@@ -548,6 +564,12 @@ static bool format_supported_by_display(const md_broker_peer_t* display,
     return false;
 }
 
+
+/*
+ * Negotiates the format/modifier intersection: a producer candidate is
+ * selected only when every bound, ready display supports the exact
+ * (fourcc, plane_count, modifier) triple.
+ */
 static bool formats_intersect(const md_broker_route_t* route, md_format_cap_t* selected) {
     if (route == nullptr || route->producer == nullptr || route->display_count == 0U) return false;
     const md_broker_peer_t* producer = route->producer;
@@ -569,6 +591,11 @@ static bool formats_intersect(const md_broker_route_t* route, md_format_cap_t* s
     return false;
 }
 
+
+/*
+ * Derives the producer's OUTPUT_CONFIG from the primary display's geometry and
+ * the negotiated format, then marks the route as configured.
+ */
 static int send_output_config(md_broker_route_t* route) {
     if (route == nullptr || route->display == nullptr || route->producer == nullptr) return MD_ERR_STATE;
     md_broker_peer_t* producer = route->producer;
@@ -593,6 +620,12 @@ static int send_output_config(md_broker_route_t* route) {
     return rc;
 }
 
+
+/*
+ * Forwards the active pool to one display as BIND_BUFFERS.  Pool descriptors
+ * are duplicated for the outbound message because the route owns them until the
+ * pool is retired; a display receives the pool at most once per generation.
+ */
 static int send_pool_to_display(md_broker_route_t* route, md_broker_peer_t* display) {
     if (route == nullptr || display == nullptr || !route_has_display(route, display) ||
         !route->pool_active) return MD_ERR_STATE;
@@ -633,6 +666,12 @@ static int send_pool_to_displays(md_broker_route_t* route) {
     return MD_OK;
 }
 
+
+/*
+ * Starts pool replacement for one display: sends UNBIND and records the
+ * pending generation.  The pool stays valid until every display sends
+ * UNBIND_DONE (see route_all_unbound).
+ */
 static int send_unbind_to_display(md_broker_route_t* route, md_broker_peer_t* display) {
     if (route == nullptr || display == nullptr || !route_has_display(route, display) ||
         !route->pool_active) return MD_ERR_STATE;
@@ -692,6 +731,11 @@ static int send_retire_to_producer(md_broker_route_t* route) {
     return send_encoded(route->producer, MD_OP_RETIRE_BUFFERS, payload, payload_size);
 }
 
+
+/*
+ * Binds the pool to all displays once the route has a producer, a display,
+ * and an active pool, and no unbind/retire is in flight.
+ */
 static int maybe_bind_pool(md_broker_route_t* route) {
     if (route == nullptr || route->display == nullptr || route->producer == nullptr ||
         !route->pool_active || route->unbind_pending || route->retire_pending) return MD_OK;
@@ -711,6 +755,12 @@ static int discard_producer_frame(md_broker_route_t* route, md_packet_t* packet)
     return close_result == 0 && signal_result == MD_OK ? MD_OK : MD_ERR_IO;
 }
 
+
+/*
+ * Routes one display-role packet: registration, consumer caps, unbind
+ * acknowledgement, pointer input, window state, and geometry updates.  Each case
+ * validates role state before mutating the route.
+ */
 static int handle_display_packet(md_broker_t* broker, md_broker_peer_t* peer,
                                   md_packet_t* packet) {
     md_broker_route_t* route = peer->route;
@@ -850,6 +900,12 @@ static int handle_display_packet(md_broker_t* broker, md_broker_peer_t* peer,
     }
 }
 
+
+/*
+ * Routes one producer-role packet: registration, buffer offers, frame
+ * submission (fanned out to every display), configuration, and retirement
+ * acknowledgements.
+ */
 static int handle_producer_packet(md_broker_t* broker, md_broker_peer_t* peer,
                                   md_packet_t* packet) {
     md_broker_route_t* route = peer->route;
@@ -1082,6 +1138,11 @@ static int handle_producer_packet(md_broker_t* broker, md_broker_peer_t* peer,
     }
 }
 
+
+/*
+ * Top-level packet dispatcher: enforces the HELLO-first rule, then sends the
+ * packet to the role handler matching the peer's registered role.
+ */
 static int handle_peer_packet(md_broker_t* broker, md_broker_peer_t* peer,
                               md_packet_t* packet) {
     if (packet->major != MIRAGE_DISPLAY_PROTOCOL_MAJOR || packet->minor != peer->minor) {
@@ -1161,6 +1222,13 @@ static int disconnect_peer(md_broker_t* broker, md_broker_peer_t* peer) {
     return detach_result;
 }
 
+
+/*
+ * Accepts one peer on the listener and validates its credentials with
+ * SO_PEERCRED: any UID different from the broker's own is rejected before any
+ * protocol byte is processed.  The peer starts in an empty slot and waits for
+ * HELLO.
+ */
 static md_broker_peer_t* accept_peer(md_broker_t* broker) {
     const int fd = accept4(broker->listen_fd, nullptr, nullptr, SOCK_NONBLOCK | SOCK_CLOEXEC);
     if (fd < 0) return nullptr;
@@ -1244,6 +1312,11 @@ void md_broker_free(md_broker_t* broker) {
     delete broker;
 }
 
+
+/*
+ * Binds the AF_UNIX SOCK_SEQPACKET endpoint with mode 0600 (pathname sockets
+ * are unlinked on stop/free) and starts accepting peers.
+ */
 md_result_t md_broker_listen(md_broker_t* broker) {
     if (broker == nullptr || broker->listening) return MD_ERR_STATE;
     const bool abstract = broker->socket_path[0] == '@';
@@ -1301,6 +1374,13 @@ const char* md_broker_socket_path(const md_broker_t* broker) {
     return broker != nullptr ? broker->socket_path.c_str() : nullptr;
 }
 
+
+/*
+ * Polls the listener and every active peer for up to timeout_ms, accepting new
+ * peers, draining readable packets, flushing writable outboxes, and polling
+ * completed fanouts.  A negative timeout blocks until an event; the returned
+ * count includes accepted peers and handled packets.
+ */
 int32_t md_broker_dispatch(md_broker_t* broker, const int32_t timeout_ms) {
     if (broker == nullptr || !broker->listening) return MD_ERR_STATE;
     if (broker->stopping.load()) return MD_ERR_DISCONNECTED;

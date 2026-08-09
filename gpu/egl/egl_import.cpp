@@ -14,6 +14,15 @@
 
 #include <fcntl.h>
 
+/*
+ * EGL DMA-BUF import helper (include/mirage_display_egl.h) built on
+ * EGL_EXT_image_dma_buf_import with native fence synchronization.
+ *
+ * The importer owns every EGLImage it creates and releases them when the pool is
+ * replaced or freed; the acquire/release sync helpers consume their descriptors
+ * on every path.
+ */
+
 struct md_egl_importer {
     md_egl_context_t context;
     /* Resolved once via eglGetProcAddress; NULL means the driver lacks the extension. */
@@ -84,6 +93,12 @@ md_result_t destroy_images(md_egl_importer_t* const importer) {
 
 }  // namespace
 
+
+/*
+ * Resolves the KHR extension entry points lazily at construction; only
+ * eglCreateImageKHR / eglDestroyImageKHR are mandatory, and their absence means
+ * the driver does not support EGL_EXT_image_dma_buf_import.
+ */
 extern "C" md_egl_importer_t* md_egl_importer_new(const md_egl_context_t* const context) {
     if (context == nullptr || context->display == EGL_NO_DISPLAY) {
         return nullptr;
@@ -143,6 +158,12 @@ extern "C" const md_egl_imported_pool_t* md_egl_importer_pool(
     return &importer->pool;
 }
 
+
+/*
+ * Validates the protocol pool against EGLint bounds, then creates one
+ * EGLImageKHR per buffer from the DMA-BUF descriptors.  The pool must not be
+ * active; pool descriptors are borrowed and never closed by the importer.
+ */
 extern "C" md_result_t md_egl_importer_import_pool(md_egl_importer_t* const importer,
                                                      const md_buffer_pool_t* const pool) {
     if (importer == nullptr || pool == nullptr || importer->pool_active) {
@@ -271,6 +292,12 @@ extern "C" md_result_t md_egl_importer_import_pool(md_egl_importer_t* const impo
     return MD_OK;
 }
 
+
+/*
+ * Imports the acquire sync_file as a native fence and inserts a wait into the
+ * EGL stream so GL commands that follow cannot sample the frame before the
+ * producer finished writing it.  Consumes acquire_sync_fd on every path.
+ */
 extern "C" md_result_t md_egl_wait_acquire_sync(md_egl_importer_t* const importer,
                                                  const int32_t acquire_sync_fd) {
     if (acquire_sync_fd < 0) {
@@ -318,6 +345,12 @@ extern "C" md_result_t md_egl_wait_acquire_sync(md_egl_importer_t* const importe
     return waited == EGL_TRUE ? MD_OK : MD_ERR_IO;
 }
 
+
+/*
+ * Attaches a fence from the current GL context to the release syncobj after
+ * the last GPU read, letting the producer recycle the slot.  Consumes
+ * release_syncobj_fd on every path.
+ */
 extern "C" md_result_t md_egl_release_after_current_context(
     md_egl_importer_t* const importer, const int32_t release_syncobj_fd) {
     if (release_syncobj_fd < 0) {

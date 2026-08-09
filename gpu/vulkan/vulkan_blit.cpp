@@ -8,6 +8,14 @@
 #include <new>
 #include <optional>
 
+/*
+ * Same-device relay/blit fallback (include/mirage_display_vulkan_blit.h).
+ *
+ * Copies an imported RGB image into a host-owned optimal image so Qt Quick
+ * consumers can sample formats that cannot be sampled directly; semaphores
+ * remain importer-owned.
+ */
+
 struct md_vk_blitter {
     md_vk_blit_context_t context;
     VkCommandPool command_pool;
@@ -39,6 +47,11 @@ void destroy_shadow(md_vk_blitter_t* const blitter) {
     blitter->content_valid = false;
 }
 
+
+/*
+ * Allocates or reallocates the host-owned optimal shadow image and its memory
+ * so the blitter always has a sampler-compatible destination.
+ */
 md_result_t ensure_shadow(md_vk_blitter_t* const blitter, const uint32_t width,
                           const uint32_t height, const VkFormat format) {
     if (blitter->image != VK_NULL_HANDLE && blitter->width == width &&
@@ -174,6 +187,13 @@ extern "C" void md_vk_blitter_free(md_vk_blitter_t* const blitter) {
     delete blitter;
 }
 
+
+/*
+ * Copies one imported frame into the shadow image, waits the acquire
+ * semaphore, and signals the release semaphore only after the imported image is
+ * released back to VK_QUEUE_FAMILY_FOREIGN_EXT.  Returns after device work
+ * completes; semaphores stay importer-owned.
+ */
 extern "C" md_result_t md_vk_blitter_blit(md_vk_blitter_t* const blitter,
                                            const md_vk_imported_pool_t* const pool,
                                            const uint32_t buffer_index,

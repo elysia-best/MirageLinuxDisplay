@@ -4,6 +4,14 @@
 #include <cstdint>
 #include <sys/ioctl.h>
 
+/*
+ * Minimal DRM syncobj ioctl ABI declarations.
+ *
+ * The ioctl structs use an explicit eight-byte wire layout because they cross
+ * the kernel ABI; the ioctl numbers come from drm.h and are pinned here so the
+ * core library does not depend on system headers for these operations.
+ */
+
 /* Kernel ioctl structs have an explicit eight-byte wire layout. */
 #pragma pack(push, 8)
 struct md_drm_syncobj_create {

@@ -3,6 +3,16 @@
 
 #include <stdint.h>
 
+/*
+ * Public C ABI for the MirageLinuxDisplay consumer library.
+ *
+ * Desktop-environment adapters use this library to connect to the
+ * mirage-display-v1 broker, register a stable output, receive DMA-BUF buffer
+ * pools and frames, and report pointer/window state back to the renderer.  All
+ * public DTOs use an explicit eight-byte packing contract so C, C++, and FFI
+ * callers never depend on compiler-default layout.
+ */
+
 #ifdef __cplusplus
 extern "C" {
 #endif

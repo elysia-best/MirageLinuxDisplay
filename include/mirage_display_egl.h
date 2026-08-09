@@ -7,6 +7,14 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 
+/*
+ * Public C ABI for the EGL DMA-BUF import helper.
+ *
+ * Consumers with an EGL display import protocol buffer pools through
+ * EGL_EXT_image_dma_buf_import and synchronize with native fences; the
+ * acquire/release helpers consume their descriptors on every path.
+ */
+
 #ifdef __cplusplus
 extern "C" {
 #endif

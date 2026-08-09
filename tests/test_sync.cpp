@@ -16,6 +16,10 @@
 #include <sys/sysmacros.h>
 #include <unistd.h>
 
+/*
+ * Unit tests for DRM syncobj fanout and sync_file bridging.
+ */
+
 static void assert_closed(int fd) {
     errno = 0;
     assert(fcntl(fd, F_GETFD) == -1);

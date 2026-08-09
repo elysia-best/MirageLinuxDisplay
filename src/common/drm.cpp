@@ -9,6 +9,10 @@
 #include <sys/sysmacros.h>
 #include <unistd.h>
 
+/*
+ * Implementation of the DRM render-node opener and the syncobj destructor.
+ */
+
 std::int32_t md_drm_open_render_node(const std::uint32_t drm_major,
                                      const std::uint32_t drm_minor) {
     if (drm_major != 0U || drm_minor != 0U) {

@@ -7,6 +7,15 @@
 #include <cstddef>
 #include <cstdint>
 
+/*
+ * mirage-display-v1 opcodes, wire primitives, and per-message encoders/decoders.
+ *
+ * Encoders write into a caller-provided buffer; decoders consume bytes
+ * sequentially without allocating.  Every decoder enforces the documented wire
+ * limits (strings <= 4096 bytes, exact element counts, no trailing bytes) and
+ * reports MD_ERR_PROTOCOL instead of guessing at malformed input.
+ */
+
 enum md_opcode : std::uint16_t {
     MD_OP_HELLO = 0x0001,
     MD_OP_GOODBYE = 0x0002,

@@ -17,6 +17,11 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+/*
+ * Integration tests for the broker routing core: peer validation, routing,
+ * format negotiation, fanout, and buffer generation management.
+ */
+
 typedef struct broker_thread {
     md_broker_t* broker{};
     pthread_t thread{};

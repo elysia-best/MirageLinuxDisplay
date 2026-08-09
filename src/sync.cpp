@@ -11,6 +11,15 @@
 #include <new>
 #include <unistd.h>
 
+/*
+ * DRM syncobj fanout and sync_file bridging used by the broker and the C
+ * consumer helpers.
+ *
+ * The fanout turns one producer release syncobj into one child per consumer so
+ * each display can release its own GPU work independently; md_sync_fanout_poll
+ * tracks completion and md_sync_fanout_abandon drops unavailable consumers.
+ */
+
 /* The opaque C handle owns the DRM import, every child syncobj, and the
  * exported-child tracking arrays until md_sync_fanout_free consumes it. */
 struct md_sync_fanout {
@@ -68,6 +77,13 @@ void close_child_fds(int* const child_fds, const uint32_t child_count) {
 
 }  // namespace
 
+
+/*
+ * Imports the producer's release syncobj on the given DRM render node and
+ * creates child_count binary syncobjs, one per consumer.  The original FD is
+ * borrowed; on MD_OK each child FD transfers to the caller and *out_fanout owns
+ * the fanout until md_sync_fanout_free.
+ */
 int md_sync_fanout_create_on_node(const int original_syncobj_fd, const uint32_t child_count,
                                   const uint32_t drm_major, const uint32_t drm_minor,
                                   int* const child_fds, md_sync_fanout_t** const out_fanout) {
@@ -160,6 +176,11 @@ int md_sync_fanout_create(const int original_syncobj_fd, const uint32_t child_co
                                          out_fanout);
 }
 
+
+/*
+ * Marks one consumer as gone and signals its child so the fanout never waits
+ * on it; the fanout object itself remains owned by the caller.
+ */
 void md_sync_fanout_abandon(md_sync_fanout_t* const fanout, const uint32_t child_index) {
     if (fanout == nullptr || fanout->finished || child_index >= fanout->child_count ||
         fanout->abandoned[child_index] != 0U) {
@@ -249,6 +270,12 @@ void md_sync_fanout_free(md_sync_fanout_t* const fanout) {
     delete fanout;
 }
 
+
+/*
+ * CPU fallback that signals a release syncobj without GPU work, used when a
+ * frame is rejected, stale, or unhandled.  Consumes release_syncobj_fd on every
+ * path.
+ */
 md_result_t md_display_signal_release_syncobj_on_node(const int release_syncobj_fd,
                                                        const uint32_t drm_major,
                                                        const uint32_t drm_minor) {
@@ -285,6 +312,12 @@ md_result_t md_display_signal_release_syncobj(const int32_t release_syncobj_fd) 
     return md_display_signal_release_syncobj_on_node(release_syncobj_fd, 0U, 0U);
 }
 
+
+/*
+ * Bridges a completed sync_file into a release syncobj so a host without
+ * explicit-sync plumbing can still release a slot exactly once.  Consumes both
+ * descriptors on every path.
+ */
 md_result_t md_display_release_after_sync_file(const int32_t release_syncobj_fd,
                                                const int32_t sync_file_fd) {
     if (release_syncobj_fd < 0 || sync_file_fd < 0) {

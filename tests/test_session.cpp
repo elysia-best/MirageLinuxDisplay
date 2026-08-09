@@ -20,6 +20,11 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+/*
+ * Unit tests for the shared client handshake state machine and connection
+ * lifecycle.
+ */
+
 typedef struct mock_broker {
     int server_fd{};
     int client_fd{};

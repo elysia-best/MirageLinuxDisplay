@@ -19,6 +19,11 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+/*
+ * Unit tests for the producer session: buffer lending, frame submission, and
+ * retirement.
+ */
+
 typedef struct mock_broker {
     int server_fd{};
     int client_fd{};

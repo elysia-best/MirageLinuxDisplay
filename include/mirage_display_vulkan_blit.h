@@ -3,6 +3,15 @@
 
 #include "mirage_display_vulkan.h"
 
+/*
+ * Public C ABI for the Vulkan same-device relay/blit fallback.
+ *
+ * Copies one imported RGB image into a host-owned optimal image so consumers can
+ * sample formats that cannot be sampled directly; the acquire semaphore is
+ * waited and the release semaphore is signaled after the imported image returns
+ * to VK_QUEUE_FAMILY_FOREIGN_EXT.
+ */
+
 #ifdef __cplusplus
 extern "C" {
 #endif

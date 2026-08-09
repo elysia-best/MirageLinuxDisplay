@@ -6,6 +6,11 @@
 #include <cstddef>
 #include <cstdint>
 
+/*
+ * Small internal ownership and helper primitives shared by every session:
+ * UniqueFd, descriptor arrays, protocol pool lifecycle, and errno mapping.
+ */
+
 namespace mirage {
 
 /*

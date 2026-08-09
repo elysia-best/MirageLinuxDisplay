@@ -4,6 +4,11 @@
 #include <cerrno>
 #include <new>
 
+/*
+ * Implementation of the outbound message queue used when the socket is not
+ * writable.
+ */
+
 md_outbox_t::Message::Message(const std::uint16_t message_opcode,
                               const std::uint16_t message_flags,
                               const std::uint32_t message_serial,

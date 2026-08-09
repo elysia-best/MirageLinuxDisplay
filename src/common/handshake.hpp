@@ -10,6 +10,15 @@
 #include <cstdint>
 #include <string>
 
+/*
+ * Shared client transport and mirage-display-v1 handshake state machine used by
+ * both the display and producer sessions.
+ *
+ * The two protocol roles share every handshake step except registration, so a
+ * single base class with virtual role hooks replaces three near-identical
+ * implementations.
+ */
+
 inline constexpr std::size_t MD_HANDSHAKE_BUFFER_SIZE = 4096U;
 inline constexpr std::uint32_t MD_CLIENT_ROLE_DISPLAY = 1U;
 inline constexpr std::uint32_t MD_CLIENT_ROLE_PRODUCER = 2U;

@@ -12,6 +12,14 @@
 
 #include <fcntl.h>
 
+/*
+ * Vulkan external-memory DMA-BUF importer (include/mirage_display_vulkan.h).
+ *
+ * Imports each plane as VkDeviceMemory through VK_KHR_external_memory_fd,
+ * creates images/views and the optional YCbCr conversion, and exposes the
+ * GENERAL-layout queue-family ownership barriers required by protocol v1.
+ */
+
 struct md_vk_importer {
     md_vk_context_t context;
     /* Resolved once from the device; NULL means the driver lacks the extension. */
@@ -105,6 +113,12 @@ void destroy_pool_objects(md_vk_importer_t* const importer) {
     clear_pool(&importer->pool);
 }
 
+
+/*
+ * Imports one DMA-BUF plane as VkDeviceMemory and binds it to the image.
+ * Disjoint formats (NV12) allocate one memory object per plane; other formats
+ * bind the single non-disjoint allocation to plane zero.
+ */
 md_result_t import_plane_memory(md_vk_importer_t* const importer,
                                 const md_buffer_pool_t* const source,
                                 const uint32_t image_index,
@@ -205,6 +219,12 @@ md_result_t import_plane_memory(md_vk_importer_t* const importer,
     return bind_result == VK_SUCCESS ? MD_OK : MD_ERR_IO;
 }
 
+
+/*
+ * Creates one VkImage through the DRM-format-modifier explicit layout path,
+ * binds its plane memories, and creates the image view (with a YCbCr conversion
+ * for disjoint formats) plus the per-buffer acquire/release semaphores.
+ */
 md_result_t import_one_image(md_vk_importer_t* const importer,
                              const md_buffer_pool_t* const source,
                              const uint32_t image_index, const VkFormat format,
@@ -367,6 +387,11 @@ md_result_t make_barrier(const md_vk_importer_t* const importer,
 
 }  // namespace
 
+
+/*
+ * Maps the DRM fourcc codes supported by the first Vulkan backend revision
+ * onto VkFormat plus a component swizzle that preserves the wire colors.
+ */
 extern "C" md_result_t md_vk_fourcc_to_format(const uint32_t fourcc, VkFormat* const format,
                                                 VkComponentMapping* const mapping) {
     if (format == nullptr || mapping == nullptr) {
@@ -400,6 +425,12 @@ extern "C" md_result_t md_vk_fourcc_to_format(const uint32_t fourcc, VkFormat* c
     }
 }
 
+
+/*
+ * Enumerates DRM modifiers on the physical device that support every required
+ * tiling feature, filling md_format_cap_t entries for the producer's capability
+ * advertisement.  Passing caps=NULL and capacity=0 queries the count.
+ */
 extern "C" md_result_t md_vk_query_format_caps(
     const VkPhysicalDevice physical_device, const uint32_t fourcc,
     const VkFormatFeatureFlags required_features, md_format_cap_t* const caps,
@@ -624,6 +655,12 @@ extern "C" md_result_t md_vk_importer_import_pool(md_vk_importer_t* const import
     return MD_OK;
 }
 
+
+/*
+ * Imports one frame acquire sync_file as a temporary binary semaphore that
+ * the consumer waits in its first read submission.  Consumes the descriptor on
+ * every path.
+ */
 extern "C" md_result_t md_vk_import_acquire_sync(md_vk_importer_t* const importer,
                                                    const uint32_t buffer_index,
                                                    const int32_t acquire_sync_fd,
@@ -641,6 +678,11 @@ extern "C" md_result_t md_vk_import_release_syncobj(
                             out_semaphore);
 }
 
+
+/*
+ * Builds the protocol-v1 GENERAL-layout queue-family ownership barrier the
+ * consumer must record before the first read of a frame.
+ */
 extern "C" md_result_t md_vk_importer_acquire_barrier(
     const md_vk_importer_t* const importer, const uint32_t buffer_index,
     const VkAccessFlags destination_access, VkImageMemoryBarrier* const out_barrier) {

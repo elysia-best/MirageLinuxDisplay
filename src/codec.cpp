@@ -11,6 +11,16 @@
 #include <sys/uio.h>
 #include <unistd.h>
 
+/*
+ * Implementation of the fixed 24-byte packet header codec and the SCM_RIGHTS
+ * send/recv helpers.
+ *
+ * The 65536-byte packet cap lets the payload array live inside md_packet_t
+ * without heap allocation.  Recv returns exactly one ordered packet per call on
+ * the nonblocking SOCK_SEQPACKET socket; send duplicates nothing and transfers
+ * descriptor ownership to the kernel on success.
+ */
+
 namespace {
 
 void write_u16(std::uint8_t* const out, const std::uint16_t value) {
@@ -64,6 +74,13 @@ void md_packet_close_fds(md_packet_t* const packet) {
     packet->fd_count = 0U;
 }
 
+
+/*
+ * Sends one ordered packet plus optional SCM_RIGHTS descriptors.  Returns 0 on
+ * success, 1 when the nonblocking socket would block (descriptor ownership stays
+ * with the caller for the outbox to retain), or -errno.  The 24-byte header is
+ * written with explicit little-endian helpers and validated by md_codec_recv.
+ */
 std::int32_t md_codec_send(const std::int32_t fd, const std::uint16_t minor,
                            const std::uint16_t opcode, const std::uint16_t flags,
                            const std::uint32_t serial, const void* const payload,
@@ -134,6 +151,13 @@ std::int32_t md_codec_send(const std::int32_t fd, const std::uint16_t minor,
     return static_cast<std::size_t>(result) == expected_size ? 0 : -EIO;
 }
 
+
+/*
+ * Receives exactly one packet into a caller-owned md_packet_t.  Returns 1 on
+ * success, 0 when the nonblocking socket has no packet, or -errno.  The received
+ * descriptors move into packet->fds; every rejection path closes them so no
+ * SCM_RIGHTS descriptor can escape an invalid packet.
+ */
 std::int32_t md_codec_recv(const std::int32_t fd, md_packet_t* const packet) {
     if (fd == mirage::kInvalidFd || packet == nullptr) {
         return -EINVAL;

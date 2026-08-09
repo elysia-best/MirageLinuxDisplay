@@ -4,6 +4,15 @@
 #include <cstddef>
 #include <cstdint>
 
+/*
+ * Wire packet codec shared by broker, display, and producer.
+ *
+ * md_packet_t is a fixed-size trivial DTO so SCM_RIGHTS descriptors can cross
+ * roles without allocation.  Whoever receives a packet owns every descriptor in
+ * its fd array and must close any descriptor not explicitly handed to a callback
+ * or queue.
+ */
+
 inline constexpr std::uint32_t MD_WIRE_MAGIC = UINT32_C(0x3150444d);
 inline constexpr std::size_t MD_WIRE_HEADER_SIZE = 24U;
 inline constexpr std::size_t MD_WIRE_MAX_PACKET = 65536U;

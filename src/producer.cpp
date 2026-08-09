@@ -14,6 +14,16 @@
 #include <utility>
 #include <vector>
 
+/*
+ * Producer-side library (include/mirage_display_producer.h): the renderer-role
+ * mirror of the consumer session, adding buffer lending, frame submission, and
+ * generation retirement.
+ *
+ * Frame synchronization descriptors are consumed by md_producer_submit_frame on
+ * every return path; pool descriptors are borrowed and duplicated for queued
+ * sends, so the pool itself always remains owned by the producer.
+ */
+
 struct md_producer final : mirage::ClientSession {
     explicit md_producer(const md_producer_callbacks_t* callbacks)
         : ClientSession(MD_CLIENT_ROLE_PRODUCER,
@@ -67,6 +77,13 @@ struct md_producer final : mirage::ClientSession {
         return MD_OK;
     }
 
+
+/*
+ * Starts a new connection over a pathname or @-prefixed abstract AF_UNIX
+ * socket.  Identity strings and the producer info are copied into session-owned
+ * storage before the shared handshake begins.
+ */
+
     md_result_t begin_path_connection(const char* socket_path, const char* client_name,
                                       const char* client_version,
                                       const md_producer_info_t* info) {
@@ -86,6 +103,12 @@ struct md_producer final : mirage::ClientSession {
         output_id_ = 0U;
         return MD_OK;
     }
+
+
+/*
+ * Adopts an already-connected SOCK_SEQPACKET descriptor (broker handoff,
+ * socket activation, or tests); ownership transfers to the producer on success.
+ */
 
     md_result_t begin_adopted_connection(const std::int32_t connected_fd,
                                          const char* client_name,
@@ -109,6 +132,12 @@ struct md_producer final : mirage::ClientSession {
         return MD_OK;
     }
 
+
+/*
+ * Blocking convenience wrapper around configure_connection + connect() for
+ * command-line tools and tests.
+ */
+
     md_result_t connect_path(const char* socket_path, const char* client_name,
                              const char* client_version, const md_producer_info_t* info,
                              const std::int32_t timeout_ms) {
@@ -121,6 +150,12 @@ struct md_producer final : mirage::ClientSession {
         output_id_ = 0U;
         return connect(timeout_ms);
     }
+
+
+/*
+ * Closes the session and resets pool state.  Pool descriptors belong to the
+ * producer and are not owned here; the caller keeps them.
+ */
 
     void close_producer() noexcept {
         close();
@@ -143,6 +178,12 @@ struct md_producer final : mirage::ClientSession {
         const md_result_t result = flush_messages();
         return result == MD_ERR_WOULD_BLOCK ? MD_OK : result;
     }
+
+
+/*
+ * Drains every currently readable packet (OUTPUT_CONFIG, RETIRE_BUFFERS, and
+ * pointer events) and invokes the borrowed callbacks.
+ */
 
     std::int32_t dispatch() {
         if (connection_state() != MD_CONNECTION_READY) {
@@ -171,6 +212,13 @@ struct md_producer final : mirage::ClientSession {
         }
         return count;
     }
+
+
+/*
+ * Lends a pool to the broker.  Pool descriptors are borrowed from the caller
+ * and duplicated with F_DUPFD_CLOEXEC because a queued send must survive while
+ * the caller may replace its pool; the pool itself remains producer-owned.
+ */
 
     md_result_t offer_buffers(const md_buffer_pool_t* pool) {
         if (pool == nullptr || pool_offered_) {
@@ -217,6 +265,12 @@ struct md_producer final : mirage::ClientSession {
         return result;
     }
 
+
+/*
+ * Forwards a placement/transform/clear-color change to the broker, which
+ * relays it to every bound display as SET_CONFIG.
+ */
+
     md_result_t set_config(const md_display_config_t* config) {
         if (config == nullptr || !pool_offered_ || retire_pending_) {
             return MD_ERR_STATE;
@@ -229,6 +283,13 @@ struct md_producer final : mirage::ClientSession {
         }
         return send_owned(MD_OP_PRODUCER_SET_CONFIG, payload.data(), writer.size, nullptr, 0U);
     }
+
+
+/*
+ * Submits one frame.  Both sync descriptors are consumed on every return path,
+ * including validation failures and a full outbox, so the caller can never
+ * double-close them.  Stale generations and retired pools are rejected.
+ */
 
     md_result_t submit_frame(const std::uint64_t generation, const std::uint32_t buffer_index,
                              const std::uint64_t sequence, const std::int32_t acquire_sync_fd,
@@ -250,6 +311,13 @@ struct md_producer final : mirage::ClientSession {
         return send_owned(MD_OP_PRODUCER_FRAME, payload.data(), writer.size, fds.data(),
                           fds.size());
     }
+
+
+/*
+ * Acknowledges RETIRE_BUFFERS after the producer stopped submitting and
+ * destroyed its local pool; resets pool state so the next generation can be
+ * offered.
+ */
 
     md_result_t retire_done(const std::uint64_t generation) {
         if (!pool_offered_ || !retire_pending_ || generation != pool_generation_) {
@@ -273,6 +341,12 @@ struct md_producer final : mirage::ClientSession {
     }
 
 protected:
+
+/*
+ * Role hooks: a producer registers itself, waits for PRODUCER_ACCEPTED, and
+ * has no separate caps step because capabilities ride in REGISTER_PRODUCER.
+ */
+
     [[nodiscard]] std::uint16_t register_opcode() const noexcept override {
         return MD_OP_REGISTER_PRODUCER;
     }
@@ -324,6 +398,12 @@ protected:
     }
 
 private:
+
+/*
+ * Requires a non-empty format list so the broker always has a capability
+ * intersection to negotiate with.
+ */
+
     static bool valid_info(const md_producer_info_t* const info) {
         if (info == nullptr || info->stable_output_id == nullptr || info->kind == nullptr ||
             info->format_count == 0U || info->format_count > MIRAGE_DISPLAY_MAX_FORMATS ||
@@ -517,6 +597,12 @@ private:
     std::uint64_t pool_generation_;
     std::uint32_t pool_buffer_count_;
 };
+
+
+/*
+ * C ABI entry points below are thin wrappers over the C++ session object; null
+ * handles map to documented errors instead of crashing.
+ */
 
 extern "C" md_producer_t* md_producer_new(const md_producer_callbacks_t* const callbacks) {
     try {

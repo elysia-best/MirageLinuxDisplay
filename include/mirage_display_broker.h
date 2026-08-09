@@ -3,6 +3,14 @@
 
 #include "mirage_display.h"
 
+/*
+ * Public C ABI for the MirageLinuxDisplay broker routing core.
+ *
+ * The broker binds the 0600 AF_UNIX SOCK_SEQPACKET endpoint, validates peers via
+ * SO_PEERCRED, routes one producer to many display consumers per stable output
+ * id, and forwards packets and descriptors without ever copying pixel data.
+ */
+
 #ifdef __cplusplus
 extern "C" {
 #endif

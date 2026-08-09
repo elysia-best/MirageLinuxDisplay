@@ -1,5 +1,9 @@
 #include "vulkan_util.hpp"
 
+/*
+ * Implementation of the shared Vulkan instance/device helpers.
+ */
+
 namespace mirage::vulkan {
 
 std::optional<uint32_t> choose_memory_type(

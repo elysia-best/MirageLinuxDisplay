@@ -10,6 +10,12 @@
 #include <string.h>
 #include <unistd.h>
 
+/*
+ * Standalone consumer example: connects to a mirage-display-v1 broker and
+ * prints pool, config, and frame callbacks for protocol debugging without a
+ * desktop environment.
+ */
+
 static volatile sig_atomic_t running = 1;
 
 static void stop_running(int) {

@@ -5,6 +5,12 @@
 #include <cstring>
 #include <string_view>
 
+/*
+ * Implementation of md_fill_unix_address.  Pathname addresses are
+ * NUL-terminated inside sockaddr_un; abstract names occupy the first byte of
+ * sun_path with a leading NUL and use a shorter address length.
+ */
+
 md_result_t md_fill_unix_address(const char* const path, sockaddr_un* const address,
                                  socklen_t* const address_length) {
     if (path == nullptr || address == nullptr || address_length == nullptr) {

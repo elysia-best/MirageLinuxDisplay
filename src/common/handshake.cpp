@@ -12,6 +12,14 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+/*
+ * Implementation of the shared ClientSession transport and handshake.
+ *
+ * Handshake packets are staged in a fixed buffer; the outbox holds any
+ * post-registration messages so SCM_RIGHTS ownership is preserved while the
+ * socket is not writable.
+ */
+
 namespace mirage {
 
 ClientSession::ClientSession(const std::uint32_t role, const std::uint64_t advertised_features)
@@ -80,6 +88,13 @@ md_result_t ClientSession::activate_handshake() {
                                  static_cast<md_result_t>(result), "cannot encode hello"));
 }
 
+
+/*
+ * Creates a nonblocking CLOEXEC SOCK_SEQPACKET socket and starts connecting to
+ * the configured pathname or @-prefixed abstract address.  A completed connect
+ * activates the handshake immediately; an in-progress one is finished by
+ * advance_handshake().
+ */
 md_result_t ClientSession::begin_connect() {
     if (connection_state_ != MD_CONNECTION_DISCONNECTED) {
         return MD_ERR_STATE;
@@ -124,6 +139,12 @@ md_result_t ClientSession::begin_connect() {
     return MD_OK;
 }
 
+
+/*
+ * Adopts a caller-provided connected descriptor (broker handoff, socket
+ * activation, tests).  Forces O_NONBLOCK and FD_CLOEXEC before ownership
+ * transfers to the session.
+ */
 md_result_t ClientSession::begin_connected_fd(const std::int32_t connected_fd) {
     if (connected_fd == mirage::kInvalidFd ||
         connection_state_ != MD_CONNECTION_DISCONNECTED) {
@@ -210,6 +231,14 @@ std::int32_t ClientSession::receive_handshake(const std::uint16_t expected,
     return MD_HANDSHAKE_PROGRESS;
 }
 
+
+/*
+ * Advances the nonblocking handshake state machine: CONNECTING -> HELLO_SEND
+ * -> WELCOME_WAIT -> REGISTER_SEND -> ACCEPT_WAIT -> [CAPS_SEND] -> READY.
+ * Returns an MD_HANDSHAKE_* progress value or a negative md_result_t.  The
+ * welcome negotiation picks the minor version and intersects features; the
+ * consumer-only caps step is skipped when caps_opcode() is zero.
+ */
 std::int32_t ClientSession::advance_handshake() {
     if (!fd_.valid()) {
         return MD_ERR_STATE;
@@ -316,6 +345,12 @@ std::int32_t ClientSession::advance_handshake() {
     }
 }
 
+
+/*
+ * Blocking handshake for command-line tools and tests: drives begin_connect +
+ * advance_handshake with poll(2), honoring timeout_ms (negative blocks
+ * indefinitely).  Any failure closes the session and returns the error.
+ */
 md_result_t ClientSession::connect(const std::int32_t timeout_ms) {
     md_result_t result = begin_connect();
     if (result != MD_OK) {
@@ -359,6 +394,12 @@ md_result_t ClientSession::connect(const std::int32_t timeout_ms) {
     }
 }
 
+
+/*
+ * Best-effort close: sends GOODBYE when READY, then releases the descriptor
+ * and resets all session state.  Closing is not retriable, so send failures are
+ * deliberately ignored.
+ */
 void ClientSession::close() noexcept {
     if (fd_.valid()) {
         std::array<std::uint8_t, 4U> payload{};

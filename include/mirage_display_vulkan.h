@@ -5,6 +5,15 @@
 
 #include <vulkan/vulkan.h>
 
+/*
+ * Public C ABI for the Vulkan DMA-BUF import helper.
+ *
+ * Consumers with an existing Vulkan instance/device import protocol buffer pools
+ * through external memory FDs / DRM modifiers, create images, views, and
+ * optional YCbCr conversions, and import the per-frame acquire/release
+ * synchronization as binary semaphores.
+ */
+
 #ifdef __cplusplus
 extern "C" {
 #endif

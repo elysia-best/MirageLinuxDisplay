@@ -12,6 +12,10 @@
 #include <stdlib.h>
 #include <vector>
 
+/*
+ * Unit tests for the Vulkan DMA-BUF importer, blitter, and exporter.
+ */
+
 #define DRM_FORMAT(code0, code1, code2, code3) \
     ((uint32_t)(code0) | ((uint32_t)(code1) << 8) | ((uint32_t)(code2) << 16) | \
      ((uint32_t)(code3) << 24))

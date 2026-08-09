@@ -1,0 +1,66 @@
+# Builds the Astro/Starlight documentation site in website/ and deploys it to
+# GitHub Pages as a project site at https://elysia-best.github.io/MirageLinuxDisplay/.
+#
+# One-time setup: repository Settings -> Pages -> Source = "GitHub Actions".
+name: Deploy docs site
+
+on:
+  push:
+    branches: [master]
+    paths: ['website/**', '.github/workflows/deploy-docs.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.8.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: website/pnpm-lock.yaml
+      - name: Install dependencies
+        working-directory: website
+        run: pnpm install --frozen-lockfile
+      - name: Check
+        working-directory: website
+        run: pnpm check
+      - name: Build
+        working-directory: website
+        run: pnpm build
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: website/dist
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  # Quick markdown sanity check for the root README so doc-only pushes cannot
+  # silently break the repository's primary documentation entry point.
+  readme:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate README links and code fences
+        run: |
+          python3 - <<'PY'
+          import re
+          text = open('README.md', encoding='utf-8').read()
+          fences = re.findall(r'^```.*$', text, re.M)
+          assert len(fences) % 2 == 0, 'unbalanced code fences in README.md'
+          print(f'README.md OK: {len(fences)} code-fence markers balanced')
+          PY

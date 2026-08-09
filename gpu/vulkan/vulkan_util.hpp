@@ -6,6 +6,10 @@
 
 #include <vulkan/vulkan.h>
 
+/*
+ * Internal Vulkan helpers shared by the importer, blitter, and exporter.
+ */
+
 namespace mirage::vulkan {
 
 /*

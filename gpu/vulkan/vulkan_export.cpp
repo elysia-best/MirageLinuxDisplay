@@ -16,6 +16,15 @@
 
 #include <fcntl.h>
 
+/*
+ * Vulkan DMA-BUF exporter (include/mirage_display_vulkan_export.h) used by the
+ * renderer side to turn Vulkan images into protocol frames.
+ *
+ * Exports a signaled binary semaphore as a sync_file, creates an unsignaled DRM
+ * syncobj per frame for the consumer release, and recycles slots only after the
+ * consumer signals release.
+ */
+
 struct md_vk_export_slot {
     VkImage image;
     VkDeviceMemory memory;
@@ -373,6 +382,12 @@ md_result_t allocate_slot(md_vk_exporter_t* const exporter,
 
 }  // namespace
 
+
+/*
+ * Creates the exporter, opening the DRM render node from the context (or
+ * duplicating an already-open one) so release syncobjs can be created and
+ * polled on the same node the producer renders with.
+ */
 extern "C" md_vk_exporter_t* md_vk_exporter_new(
     const md_vk_export_context_t* const context) {
     if (context == nullptr || context->instance == VK_NULL_HANDLE ||
@@ -500,6 +515,12 @@ extern "C" void md_vk_exporter_free(md_vk_exporter_t* const exporter) {
     delete exporter;
 }
 
+
+/*
+ * Creates the DMA-BUF pool: images, per-plane exported memory, and the
+ * per-slot release syncobj handles.  Callers must wait for their own device work
+ * before replacing the current pool.
+ */
 extern "C" md_result_t md_vk_exporter_create_pool(
     md_vk_exporter_t* const exporter, const md_vk_export_pool_info_t* const info) {
     if (exporter == nullptr || info == nullptr || info->generation == 0U ||
@@ -558,6 +579,12 @@ extern "C" VkFormat md_vk_exporter_format(const md_vk_exporter_t* const exporter
                                                         : VK_FORMAT_UNDEFINED;
 }
 
+
+/*
+ * Polls every slot's release syncobj and returns the first free index.  A
+ * slot is never reused before its consumer signals release, so MD_ERR_WOULD_BLOCK
+ * means the producer must skip the current frame.
+ */
 extern "C" md_result_t md_vk_exporter_acquire(md_vk_exporter_t* const exporter,
                                                 uint32_t* const out_buffer_index) {
     if (exporter == nullptr || out_buffer_index == nullptr || !exporter->pool_active) {
@@ -582,6 +609,12 @@ extern "C" md_result_t md_vk_exporter_acquire(md_vk_exporter_t* const exporter,
     return first_error != MD_OK ? first_error : MD_ERR_WOULD_BLOCK;
 }
 
+
+/*
+ * Exports a signaled binary Vulkan semaphore as a sync_file (the acquire FD)
+ * and creates a fresh unsignaled DRM syncobj (the release FD).  Both descriptors
+ * are caller-owned and feed md_producer_submit_frame directly.
+ */
 extern "C" md_result_t md_vk_exporter_export_frame(
     md_vk_exporter_t* const exporter, const uint32_t buffer_index,
     const VkSemaphore acquire_semaphore, int32_t* const out_acquire_sync_fd,
@@ -631,6 +664,12 @@ extern "C" md_result_t md_vk_exporter_export_frame(
     return MD_OK;
 }
 
+
+/*
+ * GPU-copies a caller-owned RGBA image into an acquired export slot and then
+ * exports the copy as a protocol frame, restoring the source layout and
+ * performing the FOREIGN queue-family handoffs required by protocol v1.
+ */
 extern "C" md_result_t md_vk_exporter_copy_frame(
     md_vk_exporter_t* const exporter, const uint32_t buffer_index,
     const VkImage source_image, const VkImageLayout source_layout,
@@ -703,6 +742,12 @@ extern "C" md_result_t md_vk_exporter_copy_frame(
     return MD_OK;
 }
 
+
+/*
+ * Rolls a slot back to idle when frame submission failed after
+ * export_frame/copy_frame, destroying the release handle so the slot can be
+ * re-acquired on the next frame.
+ */
 extern "C" void md_vk_exporter_cancel_frame(md_vk_exporter_t* const exporter,
                                               const uint32_t buffer_index) {
     if (exporter == nullptr || buffer_index >= MIRAGE_DISPLAY_MAX_BUFFERS) {

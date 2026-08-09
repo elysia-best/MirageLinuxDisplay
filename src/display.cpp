@@ -13,6 +13,18 @@
 #include <utility>
 #include <vector>
 
+/*
+ * Consumer-side library (include/mirage_display.h): owns one display session,
+ * drives the shared handshake state machine, dispatches broker packets to
+ * borrowed callbacks, and tracks the active buffer pool.
+ *
+ * Threading: all public entry points except md_display_signal_release_syncobj
+ * and md_display_release_after_sync_file must run on the display event thread.
+ * A deferred unbind (md_display_defer_unbind / md_display_finish_unbind) lets a
+ * host render thread destroy GPU references while this library keeps holding the
+ * pool descriptors until finish_unbind runs on the event thread.
+ */
+
 struct md_display final : mirage::ClientSession {
     explicit md_display(const md_display_callbacks_t* callbacks)
         : ClientSession(MD_CLIENT_ROLE_DISPLAY, 0U),
@@ -73,6 +85,14 @@ struct md_display final : mirage::ClientSession {
         return MD_OK;
     }
 
+
+/*
+ * Starts a new connection over a pathname or @-prefixed abstract AF_UNIX
+ * socket.  The display must be DISCONNECTED; identity strings and the output/caps
+ * structs are copied into session-owned storage before the shared handshake
+ * begins.
+ */
+
     md_result_t begin_path_connection(const char* socket_path, const char* client_name,
                                       const char* client_version,
                                       const md_output_info_t* output,
@@ -92,6 +112,14 @@ struct md_display final : mirage::ClientSession {
         output_id_ = 0U;
         return MD_OK;
     }
+
+
+/*
+ * Adopts an already-connected SOCK_SEQPACKET descriptor for broker handoff,
+ * socket activation, or tests that cannot create pathname sockets.  The
+ * descriptor must already be nonblocking and CLOEXEC; ownership transfers to the
+ * display on success.
+ */
 
     md_result_t begin_adopted_connection(const std::int32_t connected_fd,
                                          const char* client_name,
@@ -115,6 +143,12 @@ struct md_display final : mirage::ClientSession {
         return MD_OK;
     }
 
+
+/*
+ * Blocking convenience wrapper around configure_connection + connect(), aimed
+ * at command-line tools and tests rather than event-loop integrations.
+ */
+
     md_result_t connect_path(const char* socket_path, const char* client_name,
                              const char* client_version, const md_output_info_t* output,
                              const md_consumer_caps_t* caps, const std::int32_t timeout_ms) {
@@ -126,6 +160,13 @@ struct md_display final : mirage::ClientSession {
         output_id_ = 0U;
         return connect(timeout_ms);
     }
+
+
+/*
+ * Closes the session and abandons the active pool without a release callback:
+ * this is teardown, not a broker-requested UNBIND, so the host must already be
+ * done with all pool descriptors.
+ */
 
     void close_display() noexcept {
         close();
@@ -149,6 +190,14 @@ struct md_display final : mirage::ClientSession {
         return result == MD_ERR_WOULD_BLOCK ? MD_OK : result;
     }
 
+
+/*
+ * Marks the in-flight UNBIND as deferred so the host render thread can destroy
+ * GPU references after on_buffers_releasing returns.  Valid only from inside that
+ * callback; the library keeps holding the pool descriptors until finish_unbind()
+ * completes the sequence on the event thread.
+ */
+
     md_result_t defer_unbind() {
         if (!in_unbind_callback_ || pending_unbind_generation_ == 0U) {
             return MD_ERR_STATE;
@@ -167,6 +216,14 @@ struct md_display final : mirage::ClientSession {
         }
         return complete_unbind(generation);
     }
+
+
+/*
+ * Drains every currently readable packet and dispatches it to the borrowed
+ * callbacks.  Returns the number of packets handled or a negative md_result_t.
+ * A pending deferred unbind rejects further packets by design: the pool must be
+ * released before the broker may send a new BIND_BUFFERS.
+ */
 
     std::int32_t dispatch() {
         if (connection_state() != MD_CONNECTION_READY) {
@@ -196,6 +253,12 @@ struct md_display final : mirage::ClientSession {
         return count;
     }
 
+
+/*
+ * Reports changed output geometry to the broker, which may renegotiate and
+ * start a fresh OUTPUT_CONFIG / BIND_BUFFERS cycle.
+ */
+
     md_result_t update_output(const md_output_info_t* output) {
         if (!valid_output(output)) {
             return MD_ERR_INVALID;
@@ -208,6 +271,14 @@ struct md_display final : mirage::ClientSession {
         }
         return queue_message(MD_OP_UPDATE_OUTPUT, 0U, payload.data(), writer.size);
     }
+
+
+/*
+ * Pointer message encoders share one shape: validate enum inputs, encode the
+ * fixed wire payload into a stack buffer, then queue the message (coalescing
+ * trailing pointer motion).  Coordinates are output physical pixels with a
+ * top-left origin; timestamps are monotonic microseconds.
+ */
 
     md_result_t send_pointer_enter(const float x, const float y, const std::uint64_t timestamp_us) {
         std::array<std::uint8_t, 32U> payload{};
@@ -286,6 +357,12 @@ struct md_display final : mirage::ClientSession {
     }
 
 protected:
+
+/*
+ * Role hooks for the shared ClientSession handshake: a display registers an
+ * output, waits for OUTPUT_ACCEPTED, then sends CONSUMER_CAPS.
+ */
+
     [[nodiscard]] std::uint16_t register_opcode() const noexcept override {
         return MD_OP_REGISTER_OUTPUT;
     }
@@ -331,6 +408,12 @@ protected:
     }
 
 private:
+
+/*
+ * Requires the documented NUL-terminated strings and nonzero geometry so a
+ * malformed caller input can never reach the wire encoder.
+ */
+
     static bool valid_output(const md_output_info_t* const output) {
         return output != nullptr && output->stable_id != nullptr && output->name != nullptr &&
                output->physical_width != 0U && output->physical_height != 0U &&
@@ -361,6 +444,13 @@ private:
         std::memset(&caps_, 0, sizeof(caps_));
     }
 
+
+/*
+ * Releases the active pool: optionally notifies the host via
+ * on_buffers_releasing, then closes every pool descriptor.  Used both for
+ * broker-requested UNBIND and for connection teardown.
+ */
+
     void release_pool(const bool notify) {
         if (!pool_active_) {
             return;
@@ -371,6 +461,13 @@ private:
         md_close_pool(&pool_);
         pool_active_ = false;
     }
+
+
+/*
+ * Unconditional teardown of the active pool state.  During a deferred unbind
+ * the release callback is skipped because finish_unbind() will complete the
+ * broker-requested sequence instead.
+ */
 
     void abandon_pool(const bool notify_if_needed) {
         const bool notify = notify_if_needed && pending_unbind_generation_ == 0U;
@@ -417,6 +514,13 @@ private:
             fail_session(md_map_io_error(result), "request send failed"));
     }
 
+
+/*
+ * Completes a broker-requested UNBIND: closes the pool descriptors without
+ * re-notifying and sends UNBIND_DONE so the producer may retire this generation
+ * and create the next one.
+ */
+
     md_result_t complete_unbind(const std::uint64_t generation) {
         if (generation == 0U || !pool_active_ || pending_unbind_generation_ != generation) {
             return MD_ERR_STATE;
@@ -453,6 +557,14 @@ private:
         }
         return MD_OK;
     }
+
+
+/*
+ * Dispatches one READY-state packet.  Malformed or stale packets fail the
+ * session with MD_ERR_PROTOCOL; OPTIONAL-flagged unknown opcodes are ignored.
+ * Every packet descriptor is resolved before return: moved into the pool or frame,
+ * or consumed by discard_frame_fds.
+ */
 
     md_result_t process_packet(md_packet_t* const packet) {
         if (packet->major != MIRAGE_DISPLAY_PROTOCOL_MAJOR ||
@@ -532,6 +644,13 @@ private:
                 }
                 return MD_OK;
             }
+
+/*
+ * A valid frame transfers both sync descriptors to the callback.  Stale
+ * generations, out-of-range indices, and missing FDs are rejected through
+ * discard_frame_fds so the producer never waits on an unreturned sync object.
+ */
+
             case MD_OP_FRAME_READY: {
                 if (packet->fd_count != 2U) {
                     const md_result_t discard_result = discard_frame_fds(packet);
@@ -588,6 +707,13 @@ private:
                 }
                 return MD_OK;
             }
+
+/*
+ * Broker-requested pool replacement.  The release callback runs synchronously
+ * unless the adapter calls defer_unbind(); the deferred path completes later on
+ * the event thread and sends UNBIND_DONE.
+ */
+
             case MD_OP_UNBIND: {
                 if (packet->fd_count != 0U) {
                     return static_cast<md_result_t>(
@@ -637,6 +763,12 @@ private:
     std::uint64_t pending_unbind_generation_;
     md_buffer_pool_t pool_;
 };
+
+
+/*
+ * C ABI entry points below are thin wrappers over the C++ session object; null
+ * handles map to documented errors instead of crashing.
+ */
 
 extern "C" md_display_t* md_display_new(const md_display_callbacks_t* const callbacks) {
     try {

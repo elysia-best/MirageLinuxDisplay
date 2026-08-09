@@ -3,6 +3,15 @@
 
 #include "mirage_display.h"
 
+/*
+ * Public C ABI for the MirageLinuxDisplay producer (renderer) library.
+ *
+ * Renderers use this library to advertise a stable output and format
+ * capabilities, lend DMA-BUF buffer pools, submit frames with explicit
+ * synchronization, and retire buffer generations.  It shares the handshake and
+ * transport rules of the consumer library.
+ */
+
 #ifdef __cplusplus
 extern "C" {
 #endif

@@ -10,6 +10,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+/*
+ * Unit tests for per-message encode/decode: golden vectors, UTF-8 validation,
+ * and malformed-input rejection.
+ */
+
 static void test_hello_golden_vector(void) {
     uint8_t bytes[128];
     md_writer_t writer;

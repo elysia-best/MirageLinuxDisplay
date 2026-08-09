@@ -5,6 +5,15 @@
 
 #include <vulkan/vulkan.h>
 
+/*
+ * Public C ABI for the Vulkan DMA-BUF exporter.
+ *
+ * The renderer side uses this helper to turn Vulkan images into protocol frames:
+ * it exports a signaled binary semaphore as a sync_file, creates an unsignaled
+ * binary DRM syncobj per frame for the consumer release, and recycles slots only
+ * after consumers signal release.
+ */
+
 #ifdef __cplusplus
 extern "C" {
 #endif

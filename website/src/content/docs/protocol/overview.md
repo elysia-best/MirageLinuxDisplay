@@ -3,7 +3,7 @@ title: 协议概览
 description: mirage-display-v1 的传输、报文头、基本编码、角色与特性位。
 ---
 
-状态：首个实现已冻结。`protocol/mirage_display_v1.xml` 是权威定义，本文档是它的可读形式。
+状态：首个实现已经冻结。`protocol/mirage_display_v1.xml` 是权威定义，本文档是它的可读形式。
 
 ## 传输
 
@@ -13,9 +13,9 @@ broker 监听：
 $XDG_RUNTIME_DIR/mirage-wallpaper/display-v1.sock
 ```
 
-套接字为 Linux `AF_UNIX`、`SOCK_SEQPACKET`、权限 `0600`。每条协议消息恰好是一个有序包，文件描述符通过 `SCM_RIGHTS` 随包附带。broker 拒绝 `SO_PEERCRED.uid` 与自身 uid 不同的对端。
+套接字为 Linux `AF_UNIX`、`SOCK_SEQPACKET`，权限 `0600`。每条协议消息恰好是一个有序包，文件描述符通过 `SCM_RIGHTS` 随包附带。broker 会拒绝 `SO_PEERCRED.uid` 与自身 uid 不同的对端。
 
-实现可使用 `@` 前缀的 Linux 抽象套接字用于 socket activation 或测试；生产发现路径始终为上述文件系统套接字。
+实现可以用 `@` 前缀的 Linux 抽象套接字来支持 socket activation 或测试；生产环境始终使用上述文件系统套接字作为发现路径。
 
 ## 报文头
 
@@ -35,7 +35,7 @@ $XDG_RUNTIME_DIR/mirage-wallpaper/display-v1.sock
 
 最大包尺寸为 65536 字节，因此最大负载为 65512 字节。
 
-标志位 0 为 `OPTIONAL`：只有带该位时，对端才可以忽略未知操作码；未知必选操作码是致命协议错误。
+标志位 0 为 `OPTIONAL`：只有带该位时，对端才可以忽略未知操作码；未知的必选操作码属于致命协议错误。
 
 ## 基本编码
 
@@ -46,7 +46,7 @@ $XDG_RUNTIME_DIR/mirage-wallpaper/display-v1.sock
 - `array<T>`：`u32` 数量后跟对应数量的编码值。
 - `rect`：四个 `f32`：`x`、`y`、`width`、`height`。
 
-字符串上限 4096 字节；数组受消息自身上限与包尺寸上限约束；解码器拒绝尾随字节。
+字符串上限 4096 字节；数组受消息自身的数量上限与包尺寸上限约束；解码器会拒绝带尾随字节的包。
 
 ## 角色
 
@@ -57,7 +57,7 @@ $XDG_RUNTIME_DIR/mirage-wallpaper/display-v1.sock
 | 1 | 显示消费者 |
 | 2 | 渲染生产者 |
 
-broker 对两个角色都是服务器。
+broker 是这两种角色的服务端。
 
 ## 特性位
 

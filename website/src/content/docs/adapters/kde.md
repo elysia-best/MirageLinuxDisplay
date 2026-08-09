@@ -3,7 +3,7 @@ title: KDE Plasma 适配器
 description: Plasma 6 壁纸包的构建、安装、配置与 EGL/Vulkan 双后端实现。
 ---
 
-KDE 适配器是 Plasma 6 的 `Plasma/Wallpaper` 包，后端为 Qt Quick 模块；同一个包在 Plasma X11 与 Plasma Wayland 的 `plasmashell` 中运行，不分化出裸 X11 宿主。
+KDE 适配器是 Plasma 6 的 `Plasma/Wallpaper` 壁纸包，后端为 Qt Quick 模块；同一个包在 Plasma X11 与 Plasma Wayland 的 `plasmashell` 中运行，无需单独维护裸 X11 宿主。
 
 ## 职责划分
 
@@ -21,13 +21,13 @@ KDE 适配器是 Plasma 6 的 `Plasma/Wallpaper` 包，后端为 Qt Quick 模块
 Qt Quick 显示项同时支持 **OpenGL/EGL** 与 **Vulkan** 两条导入路径：
 
 - EGL 路径使用 `EGL_EXT_image_dma_buf_import` 与原生 fence 同步；
-- Vulkan 路径使用 external memory FD / DRM 修饰符导入，并以同设备 relay/blit 回退到宿主可采样图像。
+- Vulkan 路径使用 external memory FD / DRM 修饰符导入，遇到无法直接采样的格式时，用同设备 relay/blit 回退到宿主可采样的图像。
 
-指针观察必须让 Qt 事件过滤器返回 `false`，使 Plasma 继续接收桌面点击、右键菜单、拖放与滚轮事件；渲染器由移动事件加按键状态重建拖拽。
+指针观察必须让 Qt 事件过滤器返回 `false`，这样 Plasma 才能继续接收桌面点击、右键菜单、拖放与滚轮事件；渲染器通过移动事件与按键状态重建拖拽。
 
 ## 构建与安装
 
-构建需要 CMake 3.20、Ninja、Qt 6.5 或更新版本（Gui、Qml、Quick）、pkg-config 以及 EGL/GLESv2 开发包。`kpackagetool6` 用于安装壁纸包。从仓库根目录执行：
+构建需要 CMake 3.20、Ninja、Qt 6.5 或更新版本（Gui、Qml、Quick）、pkg-config 以及 EGL/GLESv2 开发包，`kpackagetool6` 用于安装壁纸包。从仓库根目录执行：
 
 ```sh
 cmake -S . -B build-kde-package -G Ninja \

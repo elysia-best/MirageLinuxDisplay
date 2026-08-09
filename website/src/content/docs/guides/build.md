@@ -9,7 +9,7 @@ description: 从源码构建 MirageLinuxDisplay 核心库、运行测试、构�
 - CMake 3.20 或更高版本、Ninja
 - 可选：Vulkan 开发环境（`find_package(Vulkan)` 可检测）
 - 可选：EGL / GLESv2 开发包（`pkg-config` 检测 `egl` 与 `glesv2`）
-- KDE 壁纸包还需要 Qt 6.5+（Gui、Qml、Quick）与 `kpackagetool6`
+- 构建 KDE 壁纸包还需要 Qt 6.5+（Gui、Qml、Quick）与 `kpackagetool6`
 
 ## 核心库 + 测试
 
@@ -19,7 +19,7 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-Vulkan 与 EGL 助手在检测到相应开发环境时自动构建；可用 `-DMIRAGE_DISPLAY_WITH_VULKAN=OFF` / `-DMIRAGE_DISPLAY_WITH_EGL=OFF` 关闭。
+Vulkan 与 EGL 助手会在检测到相应开发环境时自动构建；也可以用 `-DMIRAGE_DISPLAY_WITH_VULKAN=OFF` / `-DMIRAGE_DISPLAY_WITH_EGL=OFF` 显式关闭。
 
 ## CMake 选项
 
@@ -34,7 +34,7 @@ Vulkan 与 EGL 助手在检测到相应开发环境时自动构建；可用 `-DM
 
 ## KDE Plasma 壁纸包
 
-KDE Plasma 壁纸包单独由 `mirage-wallpaper-package` 目标构建。使用新的构建目录可避免复用旧的根工程缓存；构建阶段只生成 ZIP，不会把核心库或 QML 模块写入系统路径：
+KDE Plasma 壁纸包由 `mirage-wallpaper-package` 目标单独构建。建议使用独立的构建目录，避免复用旧的根工程缓存；构建阶段只生成 ZIP，不会把核心库或 QML 模块写入系统路径：
 
 ```sh
 cmake -S . -B build-kde-package -G Ninja \
@@ -44,7 +44,7 @@ cmake -S . -B build-kde-package -G Ninja \
 cmake --build build-kde-package --target mirage-wallpaper-package
 ```
 
-输出 `build-kde-package/adapters/kde/mirage-wallpaper-0.2.0.zip` 后，用 KDE 包管理器安装到当前用户：
+生成 `build-kde-package/adapters/kde/mirage-wallpaper-0.2.0.zip` 后，用 KDE 包管理器安装到当前用户：
 
 ```sh
 kpackagetool6 -t Plasma/Wallpaper \
@@ -57,7 +57,7 @@ kpackagetool6 -t Plasma/Wallpaper \
 
 ## 示例
 
-核心库构建后会生成两个示例：
+核心库构建后会产生两个示例：
 
 - `mirage_headless_consumer`：无头消费端，打印缓冲池、配置与帧回调，用于协议调试。
 - `mirage_mock_broker`：mock broker，模拟 `mirage-display-v1` 服务端。
@@ -66,7 +66,7 @@ kpackagetool6 -t Plasma/Wallpaper \
 
 ## 文档网站
 
-文档网站位于 `website/`，使用 Astro + Starlight。需要 Node.js 20+ 与 pnpm：
+文档网站位于 `website/`，使用 Astro + Starlight，需要 Node.js 20+ 与 pnpm：
 
 ```sh
 cd website
@@ -76,4 +76,4 @@ pnpm build      # 产出静态站点到 website/dist/
 pnpm check      # astro check 类型与内容检查
 ```
 
-`astro.config.mjs` 中的 `SITE` / `BASE` 默认指向 GitHub Pages 项目站点 `https://elysia-best.github.io/MirageLinuxDisplay/`，可用环境变量覆盖。推送 `website/**` 到 `master` 时，[部署 workflow](/reference/troubleshooting/) 会自动构建并发布。
+`astro.config.mjs` 中的 `SITE` / `BASE` 默认指向 GitHub Pages 项目站点 `https://elysia-best.github.io/MirageLinuxDisplay/`，可以用环境变量覆盖。推送 `website/**` 到 `master` 时，[部署 workflow](/reference/troubleshooting/) 会自动构建并发布。

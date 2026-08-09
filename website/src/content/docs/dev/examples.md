@@ -7,7 +7,7 @@ description: headless 消费者与 mock broker 的用法，用于协议仿真与
 
 ## `mirage_headless_consumer`
 
-无头消费端：以命令行参数连接 broker 的 Unix 域套接字，注册一个固定输出，然后打印缓冲池、配置与帧回调（generation、尺寸、fourcc、modifier、sequence 与同步 FD），适合在没有桌面环境的情况下验证生产者 → broker → 消费者全链路。
+无头消费端：以命令行参数连接 broker 的 Unix 域套接字，注册一个固定输出，然后打印缓冲池、配置与帧回调（generation、尺寸、fourcc、modifier、sequence 与同步 FD）。在没有桌面环境的情况下，可以用它验证生产者 → broker → 消费者全链路。
 
 ```sh
 ./build/examples/mirage_headless_consumer \

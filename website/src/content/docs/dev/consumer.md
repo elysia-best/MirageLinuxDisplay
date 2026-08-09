@@ -3,7 +3,7 @@ title: 消费库（libmirage-display）
 description: mirage_display.h 的 C ABI 速览：生命周期、回调、握手、派发、延迟解绑与指针上报。
 ---
 
-消费库用于桌面环境适配器（DE 消费者）：连接 broker、注册输出、接收缓冲池与帧、上报指针与窗口状态。头文件 `include/mirage_display.h` 只导出 C11 与 C++ 可用的稳定 C ABI，公开 DTO 采用显式八字节布局。
+消费库供桌面环境适配器（DE 消费者）使用：连接 broker、注册输出、接收缓冲池与帧、上报指针与窗口状态。头文件 `include/mirage_display.h` 只导出 C11 与 C++ 都能用的稳定 C ABI，公开 DTO 采用显式八字节布局。
 
 ## 生命周期
 
@@ -13,7 +13,7 @@ md_display_t* d = md_display_new(&callbacks);   /* 调用方持有 */
 md_display_free(d);                              /* 调用方释放 */
 ```
 
-`md_display_free` 会关闭连接并恰好关闭一次库持有的全部描述符。
+`md_display_free` 会关闭连接，并把库持有的全部描述符恰好关闭一次。
 
 ## 回调
 
@@ -29,8 +29,8 @@ typedef struct md_display_callbacks {
 } md_display_callbacks_t;
 ```
 
-- 回调负载默认**借用**：`pool`、`config` 只在回调内有效。
-- `md_frame_t` 的 `acquire_sync_fd` 与 `release_syncobj_fd` **转移所有权**：每个路径都必须恰好关闭一次（采样完成后关闭）。
+- 回调负载默认是**借用**的：`pool`、`config` 只在回调内有效。
+- `md_frame_t` 的 `acquire_sync_fd` 与 `release_syncobj_fd` **转移所有权**：每条路径都必须恰好关闭一次（采样完成后关闭）。
 - 在 `on_buffers_releasing` 中可调用 `md_display_defer_unbind()` 延迟解绑（见下文）。
 
 ## 连接与握手
@@ -42,10 +42,10 @@ int32_t progress = md_display_advance_handshake(d);
 /* MD_HANDSHAKE_* 进度值，或负的 md_result_t */
 ```
 
-- 非阻塞方式：`begin_connect` 后循环 `advance_handshake`，配合 `md_display_wants_writable()` / `md_display_handle_writable()` 推进写方向。
+- 非阻塞方式：`begin_connect` 之后循环调用 `advance_handshake`，配合 `md_display_wants_writable()` / `md_display_handle_writable()` 推进写方向。
 - `md_display_begin_connected_fd(d, connected_fd, ...)` 接收已连接的 `AF_UNIX SOCK_SEQPACKET` FD（支持 broker 交接、socket activation 与测试），成功后所有权转移给 display。
 - `md_display_connect(...)` 是阻塞便捷封装，适合命令行工具与测试。
-- 所有输入字符串均为借用的 NUL 结尾字符串，且为必填。
+- 所有输入字符串都是借用的 NUL 结尾字符串，且为必填。
 
 ## 派发与事件循环
 
@@ -55,7 +55,7 @@ uint8_t md_display_wants_writable(d);
 md_result_t md_display_handle_writable(d);
 ```
 
-典型的集成方式是：把 `md_display_get_fd(d)` 挂到事件源（Qt 的 `QSocketNotifier`、GObject 的 `GSource` 或 `poll`），可读时调用 `dispatch`，`wants_writable` 为真时调用 `handle_writable`。
+典型的集成方式：把 `md_display_get_fd(d)` 挂到事件源（Qt 的 `QSocketNotifier`、GObject 的 `GSource` 或 `poll`），可读时调用 `dispatch`，`wants_writable` 为真时调用 `handle_writable`。
 
 ## 延迟解绑
 
@@ -65,7 +65,7 @@ md_result_t md_display_handle_writable(d);
 2. 渲染线程销毁宿主机 GPU 引用。
 3. 在协议事件线程调用 `md_display_finish_unbind(d, generation)`。
 
-`md_display_pending_unbind_generation(d)` 返回 0 表示没有待处理的延迟解绑。库在显式完成前一直持有池及其 FD。
+`md_display_pending_unbind_generation(d)` 返回 0 表示没有待处理的延迟解绑。库在显式完成之前一直持有池及其 FD。
 
 ## 指针与窗口状态上报
 
@@ -78,7 +78,7 @@ md_display_send_pointer_axis(d, x, y, delta_x, delta_y, source, timestamp_us, mo
 md_display_send_window_state(d, flags);
 ```
 
-坐标使用输出物理像素、左上角原点；时间戳使用单调微秒时钟。KDE 适配器的指针观察必须让 Qt 事件过滤器返回 `false`，使 Plasma 继续接收桌面点击、右键菜单、拖放与滚轮事件。
+坐标使用输出物理像素、左上角原点；时间戳使用单调微秒时钟。KDE 适配器的指针观察必须让 Qt 事件过滤器返回 `false`，这样 Plasma 才能继续接收桌面点击、右键菜单、拖放与滚轮事件。
 
 ## 同步辅助
 
@@ -87,7 +87,7 @@ md_display_signal_release_syncobj(release_syncobj_fd);  /* CPU 回退：信号 r
 md_display_release_after_sync_file(release_syncobj_fd, sync_file_fd); /* 连接二者 */
 ```
 
-两个函数都消费对应 FD，适合没有 GPU 的直接路径。
+两个函数都会消费对应 FD，适合没有 GPU 的直接路径。
 
 ## 相关
 

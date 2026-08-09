@@ -25,7 +25,7 @@ u64 timestamp_us
 u32 modifiers
 ```
 
-按键取 Linux `BTN_LEFT`、`BTN_RIGHT`、`BTN_MIDDLE`、`BTN_SIDE`、`BTN_EXTRA` 码；`state` 为 0 释放、1 按下。
+按键取 Linux `BTN_LEFT`、`BTN_RIGHT`、`BTN_MIDDLE`、`BTN_SIDE`、`BTN_EXTRA` 码；`state` 为 0 表示释放、1 表示按下。
 
 ## 指针滚轮
 
@@ -39,7 +39,7 @@ u64 timestamp_us
 u32 modifiers
 ```
 
-增量是逻辑滚轮刻度；来源为 wheel=0、finger=1、continuous=2。拖拽由移动事件加按键状态重建。
+增量以逻辑滚轮刻度为单位；来源取 wheel=0、finger=1、continuous=2。拖拽通过移动事件与按键状态重建。
 
 ## 进入与离开
 

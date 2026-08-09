@@ -26,6 +26,7 @@
 #include <QtCore/qnativeinterface.h>
 #include <QtQuick/qsgtexture_platform.h>
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <functional>
 #include <limits>
@@ -186,7 +187,6 @@ bool MirageDisplayItem::initializeOpenGLRenderer() {
 
     md_egl_context_t importerContext {
         .display = eglContext->display(),
-        .get_proc_address = nullptr,
     };
     m_importer = md_egl_importer_new(&importerContext);
     if (m_importer == nullptr) {
@@ -194,7 +194,10 @@ bool MirageDisplayItem::initializeOpenGLRenderer() {
         return false;
     }
 
-    m_imageTargetTexture = reinterpret_cast<GlEglImageTargetTexture2D>(
+    /* glEGLImageTargetTexture2DOES is an EGL/GLES extension entry point that
+     * libEGL does not export as a linkable symbol, so it must be resolved once
+     * through the EGL loader and validated before the render path uses it. */
+    m_imageTargetTexture = std::bit_cast<GlEglImageTargetTexture2D>(
         eglGetProcAddress("glEGLImageTargetTexture2DOES"));
     if (m_imageTargetTexture == nullptr) {
         md_egl_importer_free(m_importer);
@@ -579,7 +582,7 @@ void MirageDisplayItem::startConnection() {
     const QByteArray socketBytes = m_socketPath.toUtf8();
 
     int result = md_display_begin_connect(m_display, socketBytes.constData(),
-                                          "mirage-plasma", "0.1.0",
+                                          "mirage-plasma", "0.2.0",
                                           &output, &capabilities);
     if (result != MD_OK) {
         setLastError(QStringLiteral("Cannot connect to Mirage display broker"));

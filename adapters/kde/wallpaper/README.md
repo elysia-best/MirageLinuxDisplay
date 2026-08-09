@@ -13,7 +13,7 @@ X11 与 Wayland 会话行为一致。
 
 ```sh
 kpackagetool6 -t Plasma/Wallpaper \
-  -i build-kde-package/adapters/kde/mirage-wallpaper-0.1.0.zip
+  -i build-kde-package/adapters/kde/mirage-wallpaper-0.2.0.zip
 ```
 
 卸载：

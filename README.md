@@ -1,7 +1,7 @@
 # MirageLinuxDisplay
 
 为 MirageWallpaper 打造的 Linux 桌面环境显示集成层。项目定义了
-`mirage-display-v1` Unix 域套接字协议，并提供稳定的 C 消费库、渲染生产库与
+`mirage-display-v1` Unix 域套接字协议，并提供稳定的 C ABI 消费库、渲染生产库与
 路由核心；KDE Plasma 等桌面环境集成通过该库接收来自 MirageWallpaper 的
 DMA-BUF 帧，并将桌面输入回传给渲染器。
 
@@ -9,6 +9,13 @@ X11 与 Wayland 会话均受支持，但二者都通过桌面环境自有的集�
 **不创建也不管理**裸的 X11 桌面/根窗口。例如 KDE 适配器是一个 Plasma 壁纸
 插件，在 Plasma X11 与 Plasma Wayland 上以相同方式运行，工作区信息取自
 Plasma/KWin 接口。
+
+## 0.2.0 ABI
+
+核心实现使用 C++20，但 `include/` 仍只导出可由 C11 和 C++ 使用的 C ABI。
+0.2.0 将跨语言 FD、超时和状态计数收紧为定宽类型，布尔结果使用 `uint8_t`，
+并为公开 DTO 固定八字节布局；使用 0.1.x 的下游必须重新编译。线上
+`mirage-display-v1` 协议、报文语义、FD 所有权和回调顺序保持不变。
 
 ## 已实现能力
 
@@ -49,7 +56,7 @@ docs/          架构、协议与适配器文档
 ## 构建与测试
 
 ```sh
-# 核心库 + 测试
+# 核心库 + C++20 测试
 cmake -S . -B build -G Ninja -DMIRAGE_DISPLAY_BUILD_TESTS=ON
 cmake --build build
 ctest --test-dir build --output-on-failure
@@ -70,12 +77,12 @@ cmake -S . -B build-kde-package -G Ninja \
 cmake --build build-kde-package --target mirage-wallpaper-package
 ```
 
-输出 `build-kde-package/adapters/kde/mirage-wallpaper-0.1.0.zip` 后，用 KDE
+输出 `build-kde-package/adapters/kde/mirage-wallpaper-0.2.0.zip` 后，用 KDE
 包管理器安装到当前用户：
 
 ```sh
 kpackagetool6 -t Plasma/Wallpaper \
-  -i build-kde-package/adapters/kde/mirage-wallpaper-0.1.0.zip
+  -i build-kde-package/adapters/kde/mirage-wallpaper-0.2.0.zip
 ```
 
 ## 文档

@@ -42,7 +42,7 @@ Plasma/Wallpaper kpackage，`metadata.json` 位于压缩包根目录，
 
 ```sh
 kpackagetool6 -t Plasma/Wallpaper \
-  -i build-kde-package/adapters/kde/mirage-wallpaper-0.1.0.zip
+  -i build-kde-package/adapters/kde/mirage-wallpaper-0.2.0.zip
 ```
 
 卸载：

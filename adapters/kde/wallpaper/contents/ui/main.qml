@@ -26,7 +26,10 @@ WallpaperItem {
     Loader {
         id: surfaceLoader
         anchors.fill: parent
-        asynchronous: false
+        // Native QML module construction can require scene-graph resources;
+        // asynchronous loading keeps Plasma's shell event loop responsive
+        // while those resources become available after startup.
+        asynchronous: true
         active: root.initialized && root.configurationReady
         source: "MirageSurface.qml"
         onLoaded: {

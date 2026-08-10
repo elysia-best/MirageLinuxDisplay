@@ -13,9 +13,8 @@
 namespace mirage::vulkan {
 
 /*
- * Selects the first compatible memory type that satisfies every requested
- * property.  An empty result is deliberate: accepting a different memory
- * class would change the negotiated DMA-BUF contract.
+ * 优先返回满足全部必需属性的内存类型；若不存在则回退到任意兼容类型
+ * type_bits 与任何类型都不匹配时才返回空结果。
  */
 [[nodiscard]] std::optional<uint32_t> choose_memory_type(
     VkPhysicalDevice physical_device, uint32_t type_bits,

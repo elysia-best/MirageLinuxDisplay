@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <memory>
 #include <new>
-#include <optional>
 
 #include <fcntl.h>
 
@@ -162,44 +161,71 @@ md_result_t import_plane_memory(md_vk_importer_t* const importer,
 
     const uint32_t compatible_type_bits =
         requirements.memoryRequirements.memoryTypeBits & fd_properties.memoryTypeBits;
-    const std::optional<uint32_t> memory_type = mirage::vulkan::choose_memory_type(
-        importer->context.physical_device, compatible_type_bits,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    if (!memory_type.has_value()) {
+
+    /* 枚举全部兼容内存类型：优先 device-local，同时保留非 device-local
+     * 候选。PRIME 混合显卡与部分专有驱动只通过非 local 的导入类型暴露
+     * DMA-BUF，因此必须逐个尝试分配而不能只挑一个类型。 */
+    VkPhysicalDeviceMemoryProperties memory_properties{};
+    vkGetPhysicalDeviceMemoryProperties(importer->context.physical_device, &memory_properties);
+    std::array<uint32_t, VK_MAX_MEMORY_TYPES> candidates{};
+    uint32_t candidate_count = 0U;
+    for (uint32_t pass = 0U; pass < 2U; ++pass) {
+        for (uint32_t index = 0U; index < memory_properties.memoryTypeCount; ++index) {
+            if ((compatible_type_bits & (UINT32_C(1) << index)) == 0U) {
+                continue;
+            }
+            const bool device_local =
+                (memory_properties.memoryTypes[index].propertyFlags &
+                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0U;
+            if ((pass == 0U && !device_local) || (pass == 1U && device_local)) {
+                continue;
+            }
+            candidates[candidate_count++] = index;
+        }
+    }
+    if (candidate_count == 0U) {
         return MD_ERR_UNSUPPORTED;
     }
-
-    const int duplicated_descriptor = fcntl(plane.fd, F_DUPFD_CLOEXEC, 0);
-    if (duplicated_descriptor < 0) {
-        return MD_ERR_IO;
-    }
-    mirage::UniqueFd imported_fd{static_cast<int32_t>(duplicated_descriptor)};
 
     VkMemoryDedicatedAllocateInfo dedicated_info{};
     dedicated_info.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
     dedicated_info.image = importer->pool.images[image_index];
     dedicated_info.buffer = VK_NULL_HANDLE;
 
-    VkImportMemoryFdInfoKHR import_info{};
-    import_info.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR;
-    import_info.pNext = &dedicated_info;
-    import_info.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
-    const int32_t transferred_descriptor = imported_fd.release();
-    import_info.fd = transferred_descriptor;
-
-    VkMemoryAllocateInfo allocation_info{};
-    allocation_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocation_info.pNext = &import_info;
-    allocation_info.allocationSize = requirements.memoryRequirements.size;
-    allocation_info.memoryTypeIndex = memory_type.value();
-
     VkDeviceMemory& memory = importer->pool.plane_memories[image_index][plane_index];
-    const VkResult allocation_result =
-        vkAllocateMemory(device, &allocation_info, nullptr, &memory);
-    if (allocation_result != VK_SUCCESS) {
+    VkResult last_result = VK_ERROR_UNKNOWN;
+    bool allocated = false;
+    for (uint32_t candidate = 0U; candidate < candidate_count; ++candidate) {
+        const int duplicated_descriptor = fcntl(plane.fd, F_DUPFD_CLOEXEC, 0);
+        if (duplicated_descriptor < 0) {
+            return MD_ERR_IO;
+        }
+        mirage::UniqueFd imported_fd{static_cast<int32_t>(duplicated_descriptor)};
+
+        VkImportMemoryFdInfoKHR import_info{};
+        import_info.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR;
+        import_info.pNext = &dedicated_info;
+        import_info.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+        const int32_t transferred_descriptor = imported_fd.release();
+        import_info.fd = transferred_descriptor;
+
+        VkMemoryAllocateInfo allocation_info{};
+        allocation_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocation_info.pNext = &import_info;
+        allocation_info.allocationSize = requirements.memoryRequirements.size;
+        allocation_info.memoryTypeIndex = candidates[candidate];
+
+        last_result = vkAllocateMemory(device, &allocation_info, nullptr, &memory);
+        if (last_result == VK_SUCCESS) {
+            allocated = true;
+            break;
+        }
+        /* 该内存类型不接受此 DMA-BUF：关闭本次重复出的 fd，尝试下一候选。 */
         mirage::UniqueFd failed_transfer{transferred_descriptor};
-        return allocation_result == VK_ERROR_INVALID_EXTERNAL_HANDLE ? MD_ERR_UNSUPPORTED
-                                                                      : MD_ERR_IO;
+    }
+    if (!allocated) {
+        return last_result == VK_ERROR_INVALID_EXTERNAL_HANDLE ? MD_ERR_UNSUPPORTED
+                                                                : MD_ERR_IO;
     }
     /* Vulkan owns the duplicate only after successful external-memory import. */
     if (plane_index == 0U) {

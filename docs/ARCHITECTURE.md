@@ -94,6 +94,10 @@ broker 拷贝。一个 broker 提供稳定的发现、多输出路由，以及�
 - broker 路由核心（含多消费者扇出、重连与池代际管理）
 - 消费端与生产端库（含延迟解绑、指针/窗口状态）
 - EGL 导入与原生 fence 同步；Vulkan 多平面导入、relay/blit 回退与导出
+- Vulkan 外部内存导入带内存类型回退：分配 `VkDeviceMemory` 时优先选择
+  `DEVICE_LOCAL`（显存）类型，没有可用的显存类型时，再逐个尝试其它兼容类型。
+  PRIME 双显卡和部分专有驱动只允许通过非显存类型导入 DMA-BUF，没有这层回退
+  就无法在这些环境上正常播放
 - KDE Plasma 适配器（OpenGL/EGL 与 Vulkan 双后端，X11/Wayland 通用）
 
 规划中（仓库内尚无实现）：

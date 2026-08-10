@@ -30,6 +30,8 @@ external memory FD / DRM 修饰符导入：
 - `md_vk_fourcc_to_format` / `md_vk_query_format_caps`：fourcc 映射与 DRM 修饰符能力枚举（`caps=NULL, capacity=0` 时只查询数量）。
 - `md_vk_result_string`：把 `VkResult` 转成可读字符串。
 
+导入 DMA-BUF 时，`VkDeviceMemory` 必须落在该缓冲区支持的内存类型上。实现优先选择 `DEVICE_LOCAL`（显存）类型；当缓冲区只在非显存类型上可导入——常见于 PRIME 双显卡与部分专有驱动——就退而求其次，把其余兼容类型逐个尝试一遍，直到分配成功。没有这层回退，这些环境会直接导入失败，表现为壁纸播放时报 "Vulkan DMA-BUF pool import failed"。
+
 ### relay/blit 回退（`mirage_display_vulkan_blit.h`）
 
 对无法直接采样的修饰符，使用同设备 blit 把导入图像复制到宿主可采样的图像：

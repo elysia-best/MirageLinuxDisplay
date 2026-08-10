@@ -36,6 +36,14 @@ description: 构建、连接、GPU 与桌面环境的常见问题与排查路径
 
 帧的 acquire sync_file 与 release syncobj FD 的所有权转移给帧回调，每条路径都必须恰好关闭一次；关闭尚未置位的 release 描述符属于异常回退，可能导致生产者在该槽位上超时。详见[缓冲池与帧](/protocol/buffers/)。
 
+**Vulkan 报 "Vulkan DMA-BUF pool import failed"？**
+
+这是 `md_vk_importer_import_pool` 返回失败时显示项上报的错误，意思是当前缓冲池里的 DMA-BUF 无法导入为 Vulkan 图像。请按下面的顺序排查：
+
+1. **先确认两端是否跨 GPU（PRIME 双显卡）。** 渲染端（MirageWallpaper）和显示端（桌面环境）各用一块 GPU 时，DMA-BUF 常常只能在非显存（非 `DEVICE_LOCAL`）内存类型上导入。实现会自动优先选显存类型，失败后回退到其它兼容类型并逐个尝试，所以大多数 PRIME 环境无需人工干预；如果仍然失败，请确认两块 GPU 的驱动都支持 `VK_KHR_external_memory_fd`，并且该 DMA-BUF 使用的 DRM 修饰符在两块 GPU 上同时受支持。
+2. **再确认格式组合是否协商成功。** broker 只会下发消费端与生产端都支持的 `(fourcc, plane_count, modifier)` 组合。如果这个组合在当前 GPU 上不可导入，请核对 `md_vk_query_format_caps` 的枚举结果里是否包含该修饰符。
+3. **最后确认多平面格式的约束。** NV12 这类 disjoint 格式要求 `plane_count == 2`，并且驱动必须支持对应的 `VkSamplerYcbcrConversion`，否则会在创建转换器或绑定平面内存时失败。
+
 ## 桌面环境问题
 
 **Plasma 桌面点击/右键失效？**

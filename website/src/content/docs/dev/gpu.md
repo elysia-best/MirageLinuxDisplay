@@ -27,10 +27,14 @@ external memory FD / DRM 修饰符导入：
 - `md_vk_importer_import_pool`：为每个平面绑定 `VkDeviceMemory`，创建 `VkImage`/`VkImageView`；NV12 等格式还会创建 `VkSamplerYcbcrConversion`。
 - `md_vk_import_acquire_sync` / `md_vk_import_release_syncobj`：导入并消费帧同步 FD，返回可提交的信号量（acquire 是临时导入，release 是二进制信号量，必须在最终读提交中置位）。
 - `md_vk_importer_acquire_barrier` / `release_barrier`：协议 v1 要求的 `VK_IMAGE_LAYOUT_GENERAL` 队列族所有权屏障。
-- `md_vk_fourcc_to_format` / `md_vk_query_format_caps`：fourcc 映射与 DRM 修饰符能力枚举（`caps=NULL, capacity=0` 时只查询数量）。
+- `md_vk_fourcc_to_format` / `md_vk_query_format_caps`：fourcc 映射与 DRM 修饰符能力枚举（`caps=NULL, capacity=0` 时只查询数量）。枚举时会用外部内存能力查询过滤掉无法作为 DMA-BUF 导入的修饰符，避免上报自身导入不了的组合。
+- `md_vk_importer_last_error` / `md_vk_import_stage_string`：最近一次导入失败的结构化记录与阶段说明，用于在桌面端给出可定位的错误信息。
+- `md_vk_query_dma_buf_import_support` / `md_vk_dma_buf_import_state_string`：在创建 importer 之前探测设备能否导入协议 DMA-BUF。探测区分两种失败：驱动不暴露所需扩展（`DRIVER_UNSUPPORTED`，如 NVIDIA 未开启 `nvidia-drm modeset`），以及扩展存在但设备未启用（`DEVICE_NOT_ENABLED`，如 Qt Quick 场景图在插件注册扩展之前就已创建设备）。前者返回缺失扩展名列表，后者通过 `vkGetMemoryFdPropertiesKHR` 的行为探测（对非 DMA-BUF fd，启用时返回 `VK_ERROR_INVALID_EXTERNAL_HANDLE`，未启用时返回 `VK_ERROR_EXTENSION_NOT_PRESENT`）判定。
 - `md_vk_result_string`：把 `VkResult` 转成可读字符串。
 
-导入 DMA-BUF 时，`VkDeviceMemory` 必须落在该缓冲区支持的内存类型上。实现优先选择 `DEVICE_LOCAL`（显存）类型；当缓冲区只在非显存类型上可导入——常见于 PRIME 双显卡与部分专有驱动——就退而求其次，把其余兼容类型逐个尝试一遍，直到分配成功。没有这层回退，这些环境会直接导入失败，表现为壁纸播放时报 "Vulkan DMA-BUF pool import failed"。
+导入 DMA-BUF 时，`VkDeviceMemory` 必须落在该缓冲区支持的内存类型上。实现优先选择 `DEVICE_LOCAL`（显存）类型；当缓冲区只在非显存类型上可导入——常见于 PRIME 双显卡与部分专有驱动——就退而求其次，把其余兼容类型逐个尝试一遍，直到分配成功。没有这层回退，这些环境会直接导入失败，表现为壁纸播放时报 "Vulkan DMA-BUF pool import failed"；此时壁纸叠加层会显示具体的失败阶段与 `VkResult`，可按[故障排查](/reference/troubleshooting/)逐步定位。
+
+KDE 桌面（plasmashell）下走 Vulkan 渲染后端时，Qt Quick 场景图在壁纸插件有机会注册设备扩展之前就已创建设备，因此 `md_vk_query_dma_buf_import_support` 通常返回 `DEVICE_NOT_ENABLED`。Qt 为这类 Qt Quick 应用提供的启用途径是 `QT_VULKAN_DEVICE_EXTENSIONS` 环境变量（分号分隔的扩展名列表，见[故障排查](/reference/troubleshooting/)）；也可以在启动时探测失败后直接改用 OpenGL 渲染后端走 EGL 导入。
 
 ### relay/blit 回退（`mirage_display_vulkan_blit.h`）
 

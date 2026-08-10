@@ -27,6 +27,15 @@ Qt Quick 显示项按场景图后端自动选择导入路径：
 
 两种路径下，表面归属与输入都由 Plasma 负责。
 
+**Vulkan 后端有一个前提：桌面程序必须放行 DMA-BUF。** 壁纸插件跑在
+plasmashell 里，而 plasmashell 在启动时就把显卡功能清单定死了，壁纸
+插件没法自己往里面加。所以走 Vulkan 后端时，如果桌面上报
+`VK_ERROR_EXTENSION_NOT_PRESENT`（`memory FD properties query failed`），
+需要先在驱动侧启用 NVIDIA 的 `nvidia-drm modeset=1`，再用
+`QT_VULKAN_DEVICE_EXTENSIONS` 环境变量让 plasmashell 带上扩展清单，
+完整步骤见[故障排查](/reference/troubleshooting/)。不想折腾的话，把
+渲染后端切回 OpenGL 也能正常显示（EGL 路径不依赖这些扩展）。
+
 窗口状态取自 `org.kde.taskmanager`（由 Plasma/KWin 工作区数据支撑，在
 两种会话类型下行为一致），不查询 X11 窗口。`MirageSurfaceEmbed.qml`
 变体用于把显示项嵌入其他 Plasma 界面（以 `MIRAGE_DISPLAY_QML_URI`

@@ -38,11 +38,71 @@ description: 构建、连接、GPU 与桌面环境的常见问题与排查路径
 
 **Vulkan 报 "Vulkan DMA-BUF pool import failed"？**
 
-这是 `md_vk_importer_import_pool` 返回失败时显示项上报的错误，意思是当前缓冲池里的 DMA-BUF 无法导入为 Vulkan 图像。请按下面的顺序排查：
+这是 `md_vk_importer_import_pool` 返回失败时显示项上报的错误，意思是当前缓冲池里的 DMA-BUF 无法导入为 Vulkan 图像。从本版本起，错误信息会追加具体的失败阶段与 `VkResult`，例如：
 
-1. **先确认两端是否跨 GPU（PRIME 双显卡）。** 渲染端（MirageWallpaper）和显示端（桌面环境）各用一块 GPU 时，DMA-BUF 常常只能在非显存（非 `DEVICE_LOCAL`）内存类型上导入。实现会自动优先选显存类型，失败后回退到其它兼容类型并逐个尝试，所以大多数 PRIME 环境无需人工干预；如果仍然失败，请确认两块 GPU 的驱动都支持 `VK_KHR_external_memory_fd`，并且该 DMA-BUF 使用的 DRM 修饰符在两块 GPU 上同时受支持。
-2. **再确认格式组合是否协商成功。** broker 只会下发消费端与生产端都支持的 `(fourcc, plane_count, modifier)` 组合。如果这个组合在当前 GPU 上不可导入，请核对 `md_vk_query_format_caps` 的枚举结果里是否包含该修饰符。
+```
+Vulkan DMA-BUF pool import failed: image creation failed (VkResult=VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT), fourcc=XBGR modifier=0x0, buffer=0
+```
+
+请按错误信息中的阶段依次排查：
+
+1. **先看失败阶段落在哪一步。**
+   - `image creation failed`：驱动不接受该（格式、修饰符、布局）组合的显式 tiling 图像。多为驱动限制——NVIDIA 专有驱动对 `VK_EXT_image_drm_format_modifier` 的显式布局校验更严格，部分版本只支持特定修饰符；请核对信息里的 `fourcc` 与 `modifier`（`0x0` 表示 LINEAR）是否确实受支持，必要时在渲染端换用无修饰符/线性组合。
+   - `DMA-BUF memory FD properties query failed` / `no memory type accepts this DMA-BUF`：通常是 **PRIME 双显卡**或驱动只通过非显存（非 `DEVICE_LOCAL`）类型暴露 DMA-BUF。实现会自动优先选显存类型、失败后逐个尝试其余兼容类型；仍失败时请确认两端 GPU 的驱动都支持 `VK_KHR_external_memory_fd`，且该修饰符在两块 GPU 上同时受支持。若 `VkResult` 为 `VK_ERROR_EXTENSION_NOT_PRESENT`，说明设备未启用 DMA-BUF 导入扩展，见下方 NVIDIA 章节。
+   - `DMA-BUF memory import allocation failed (VkResult=VK_ERROR_INVALID_EXTERNAL_HANDLE…)`：驱动拒绝了该 FD 的导入（fd 无效、修饰符不兼容或驱动限制）。`memory candidates tried=N` 表示已尝试的内存类型数量。
+   - `frame sync FD import failed`：帧的 acquire sync_file 无法导入为 Vulkan 信号量，通常是 `VK_KHR_external_semaphore_fd` 支持不全。
+2. **再确认格式组合是否协商成功。** broker 只会下发消费端与生产端都支持的 `(fourcc, plane_count, modifier)` 组合。`md_vk_query_format_caps` 现在会用外部内存能力查询过滤掉无法导入的修饰符，避免上报自身导入不了的组合；如果协商结果仍不可导入，请核对两端 GPU 与驱动版本。
 3. **最后确认多平面格式的约束。** NV12 这类 disjoint 格式要求 `plane_count == 2`，并且驱动必须支持对应的 `VkSamplerYcbcrConversion`，否则会在创建转换器或绑定平面内存时失败。
+
+**N 卡壁纸黑屏，报错 "DMA-BUF memory FD properties query failed (VK_ERROR_EXTENSION_NOT_PRESENT)"？**
+
+这是 N 卡用户最常见的黑屏原因，**照着下面三步做就能解决（已在 NVIDIA 真机上验证过）**。
+
+先用人话说说原因：壁纸的画面要借一块"共享显存"从渲染端搬到桌面端，N 卡要开两个开关才允许这么搬——一个在显卡驱动里（驱动本身得提供这个能力），一个在桌面程序里（plasmashell 启动时得把能力清单带上）。任何一个没开，画面就传不过去，桌面只剩一片黑。
+
+**第一步：确认显卡驱动开了开关**
+
+N 卡驱动默认不开这个能力，要在开机加载驱动时加一个 `modeset=1` 参数。先看现在开没开：
+
+```sh
+cat /sys/module/nvidia_drm/parameters/modeset   # 输出 Y 表示已开启
+vulkaninfo | grep external_memory_dma_buf        # 能看到这行表示驱动已提供能力
+```
+
+如果输出是 `N`，执行下面两条命令再重启电脑：
+
+```sh
+echo "options nvidia-drm modeset=1" | sudo tee /etc/modprobe.d/nvidia-modeset.conf
+sudo update-initramfs -u
+sudo reboot
+```
+
+> 提示：`update-initramfs` 是 Debian/Ubuntu 系的命令；Arch 系用 `sudo mkinitcpio -P`，其他发行版请用对应的重建 initramfs 命令。重启后重新跑一遍上面的检查，确认输出正确再继续。
+
+**第二步：让 plasmashell 带上扩展清单**
+
+壁纸插件跑在 plasmashell（桌面外壳程序）里，而这个程序一启动就把显卡功能清单定死了，壁纸插件没机会往里面加东西。Qt 为此留了个环境变量开关 `QT_VULKAN_DEVICE_EXTENSIONS`，把它写进 systemd 用户环境，plasmashell 每次启动都会自动带上：
+
+```sh
+mkdir -p ~/.config/environment.d
+cat > ~/.config/environment.d/mirage-wallpaper.conf <<'EOF'
+QT_VULKAN_DEVICE_EXTENSIONS="VK_KHR_external_memory;VK_KHR_external_memory_fd;VK_EXT_external_memory_dma_buf;VK_EXT_queue_family_foreign;VK_EXT_image_drm_format_modifier;VK_KHR_external_semaphore;VK_KHR_external_semaphore_fd;VK_KHR_sampler_ycbcr_conversion;VK_KHR_bind_memory2;VK_KHR_get_memory_requirements2"
+EOF
+```
+
+**第三步：重启桌面外壳**
+
+```sh
+systemctl --user restart plasma-plasmashell.service
+```
+
+桌面图标和任务栏会闪一下再回来，属正常现象，不用注销重登。
+
+**怎么确认修好了？** 壁纸正常播放动画；在壁纸设置里打开 "Show diagnostics" 能看到渲染后端是 Vulkan、帧数在持续上涨；桌面上不再冒出 `EXTENSION_NOT_PRESENT` 的报错。
+
+如果不想折腾这些，把桌面渲染后端切回 OpenGL 也一样能显示（EGL 传输方式不依赖上面这些 Vulkan 扩展）。
+
+> 小提示：这两个开关都弄好还黑屏的话，壁纸会在启动时直接告诉你卡在哪一步——报 `driver does not expose ...` 说明第一步没做对；报 `scene-graph device did not enable ...` 说明第二步没生效。另外壁纸只检查了画面传输的开关，帧同步的开关（`VK_KHR_external_semaphore_fd`）没开时，画面会晚一点在帧同步阶段报 `frame sync FD import failed`，可参照本章开头的同步描述符条目排查。
 
 ## 桌面环境问题
 

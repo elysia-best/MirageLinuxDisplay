@@ -27,7 +27,9 @@
 #include <QtQuick/qsgtexture_platform.h>
 #include <algorithm>
 #include <bit>
+#include <cerrno>
 #include <cmath>
+#include <cstring>
 #include <functional>
 #include <limits>
 #include <time.h>
@@ -55,6 +57,62 @@ constexpr uint32_t DrmFormatXrgb8888 = fourcc('X', 'R', '2', '4');
 constexpr uint32_t DrmFormatArgb8888 = fourcc('A', 'R', '2', '4');
 constexpr uint32_t DrmFormatXbgr8888 = fourcc('X', 'B', '2', '4');
 constexpr uint32_t DrmFormatAbgr8888 = fourcc('A', 'B', '2', '4');
+
+/* Formats a DRM fourcc as a printable four-character code ("XBGR"). */
+QString fourccString(uint32_t fourccValue) {
+    QByteArray bytes(4, Qt::Uninitialized);
+    for (int index = 0; index < 4; ++index) {
+        const char value = static_cast<char>((fourccValue >> (index * 8)) & 0xFFU);
+        bytes[index] = (value >= 0x20 && value < 0x7F) ? value : '.';
+    }
+    return QString::fromLatin1(bytes);
+}
+
+#ifdef MIRAGE_DISPLAY_QML_WITH_VULKAN
+/*
+ * Turns the importer's structured failure record into a one-line diagnostic
+ * for the KDE wallpaper overlay, e.g.:
+ *   image creation failed (VkResult=VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT), fourcc=XBGR modifier=0x0, buffer=0
+ * The stage phrase plus VkResult/errno pin down which Vulkan call rejected the
+ * pool, which is what the previous single generic message could not tell.
+ */
+QString describeVkImportFailure(const md_vk_import_error_t* error) {
+    if (error == nullptr) return QStringLiteral("no failure record");
+    QString description = QString::fromLatin1(md_vk_import_stage_string(error->stage));
+    if (error->vk_result != VK_SUCCESS) {
+        description += QStringLiteral(" (VkResult=%1)")
+                           .arg(QString::fromLatin1(md_vk_result_string(error->vk_result)));
+    } else if (error->sys_errno != 0) {
+        description += QStringLiteral(" (errno=%1: %2)")
+                           .arg(error->sys_errno)
+                           .arg(QString::fromUtf8(strerror(error->sys_errno)));
+    }
+    if (error->candidate_count >= 0) {
+        description += QStringLiteral(", memory candidates tried=%1")
+                           .arg(error->candidate_count);
+    }
+    description += QStringLiteral(", fourcc=%1 modifier=0x%2")
+                       .arg(fourccString(error->fourcc))
+                       .arg(static_cast<qulonglong>(error->modifier), 0, 16);
+    if (error->buffer_index != UINT32_MAX) {
+        description += QStringLiteral(", buffer=%1").arg(error->buffer_index);
+    }
+    if (error->plane_index != UINT32_MAX) {
+        description += QStringLiteral(", plane=%1").arg(error->plane_index);
+    }
+    if (error->stage == MD_VK_IMPORT_STAGE_MEMORY_PROPERTIES &&
+        error->vk_result == VK_ERROR_EXTENSION_NOT_PRESENT) {
+        // Defensive fallback: initializeVulkanRenderer() should already have
+        // intercepted this case, but a late EXTENSION_NOT_PRESENT still needs
+        // the actionable hint instead of a bare result code.
+        description += QStringLiteral(
+            " (VK_EXT_external_memory_dma_buf is not enabled on the scene-graph "
+            "device; enable it via QT_VULKAN_DEVICE_EXTENSIONS or use the "
+            "OpenGL render backend)");
+    }
+    return description;
+}
+#endif
 
 class FunctionJob final : public QRunnable {
 public:
@@ -249,6 +307,50 @@ bool MirageDisplayItem::initializeOpenGLRenderer() {
 #ifdef MIRAGE_DISPLAY_QML_WITH_VULKAN
 
 /*
+ * Renders a probe failure into an actionable, user-visible message. The
+ * message names the exact remediation instead of a generic import error:
+ * driver-side gaps (e.g. NVIDIA without nvidia-drm modeset) versus a scene
+ * graph that simply never enabled the extensions (plasmashell: the Qt Quick
+ * device is created before any plugin can register device extensions, and the
+ * supported workaround is the QT_VULKAN_DEVICE_EXTENSIONS environment
+ * variable).
+ */
+static QString describeDmaBufImportUnavailable(const md_vk_dma_buf_import_state_t state,
+                                               const char* const missingExtensions) {
+    switch (state) {
+    case MD_VK_DMA_BUF_IMPORT_DRIVER_UNSUPPORTED:
+        return QStringLiteral(
+                   "Vulkan DMA-BUF import unavailable: the driver does not expose %1. "
+                   "For NVIDIA GPUs enable nvidia-drm modeset=1 (kernel parameter or "
+                   "/etc/modprobe.d option, then update-initramfs and reboot); ensure "
+                   "your user can access /dev/dri/renderD* (the 'render' group); or "
+                   "use the OpenGL render backend (EGL DMA-BUF import).")
+            .arg(QString::fromUtf8(missingExtensions != nullptr && missingExtensions[0] != '\0'
+                                       ? missingExtensions
+                                       : "the required extensions"));
+    case MD_VK_DMA_BUF_IMPORT_DEVICE_NOT_ENABLED:
+        return QStringLiteral(
+                   "Vulkan DMA-BUF import unavailable: the scene-graph device did not "
+                   "enable VK_EXT_external_memory_dma_buf (device extensions must be "
+                   "requested before the scene graph initializes). Start plasmashell with "
+                   "QT_VULKAN_DEVICE_EXTENSIONS=\"VK_KHR_external_memory;"
+                   "VK_KHR_external_memory_fd;VK_EXT_external_memory_dma_buf;"
+                   "VK_EXT_queue_family_foreign;VK_EXT_image_drm_format_modifier;"
+                   "VK_KHR_external_semaphore;VK_KHR_external_semaphore_fd;"
+                   "VK_KHR_sampler_ycbcr_conversion;VK_KHR_bind_memory2;"
+                   "VK_KHR_get_memory_requirements2\", or use the OpenGL render "
+                   "backend (EGL DMA-BUF import).");
+    case MD_VK_DMA_BUF_IMPORT_UNAVAILABLE:
+        return QStringLiteral(
+                   "Vulkan DMA-BUF import unavailable: the required entry points or "
+                   "extension enumeration are not available on this device.");
+    case MD_VK_DMA_BUF_IMPORT_OK:
+    default:
+        return QStringLiteral("Vulkan DMA-BUF import unavailable");
+    }
+}
+
+/*
  * Creates the Vulkan importer and blitter from Qt Quick's device resources,
  * reads the device/driver UUIDs and DRM render node from the physical device,
  * and enumerates importable RGB modifiers to advertise as consumer caps.
@@ -272,6 +374,23 @@ bool MirageDisplayItem::initializeVulkanRenderer() {
         *physicalPointer == VK_NULL_HANDLE || *devicePointer == VK_NULL_HANDLE ||
         *queuePointer == VK_NULL_HANDLE) {
         setLastError(QStringLiteral("Qt Quick Vulkan device resources are incomplete"));
+        return false;
+    }
+    // Fail fast with an actionable message before any pool arrives: if the
+    // driver lacks the external-memory extensions (NVIDIA without modeset) or
+    // the Qt Quick device never enabled them (plasmashell scene graph), every
+    // import would otherwise fail only after the first frame with a black
+    // screen.
+    md_vk_dma_buf_import_state_t importState = MD_VK_DMA_BUF_IMPORT_UNAVAILABLE;
+    char missingExtensions[256] = {};
+    if (md_vk_query_dma_buf_import_support(*physicalPointer, *devicePointer, &importState,
+                                           missingExtensions,
+                                           sizeof(missingExtensions)) != MD_OK) {
+        setLastError(QStringLiteral("Vulkan DMA-BUF import support probe failed"));
+        return false;
+    }
+    if (importState != MD_VK_DMA_BUF_IMPORT_OK) {
+        setLastError(describeDmaBufImportUnavailable(importState, missingExtensions));
         return false;
     }
     const uint32_t queueFamily = familyPointer != nullptr ? *familyPointer : 0u;
@@ -925,8 +1044,13 @@ void MirageDisplayItem::onDisconnected(void* userData, md_result_t reason, const
 bool MirageDisplayItem::importPendingPool(const md_buffer_pool_t& pool) {
 #ifdef MIRAGE_DISPLAY_QML_WITH_VULKAN
     if (m_rendererBackend.load() == BackendVulkan) {
-        if (m_vkImporter == nullptr || md_vk_importer_import_pool(m_vkImporter, &pool) != MD_OK) {
-            setLastError(QStringLiteral("Vulkan DMA-BUF pool import failed"));
+        if (m_vkImporter == nullptr) {
+            setLastError(QStringLiteral("Vulkan DMA-BUF pool import failed: importer unavailable"));
+            return false;
+        }
+        if (md_vk_importer_import_pool(m_vkImporter, &pool) != MD_OK) {
+            setLastError(QStringLiteral("Vulkan DMA-BUF pool import failed: %1")
+                             .arg(describeVkImportFailure(md_vk_importer_last_error(m_vkImporter))));
             return false;
         }
         setImportedGeneration(pool.generation);
@@ -1121,7 +1245,9 @@ QSGNode* MirageDisplayItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeDat
                         (void)md_display_signal_release_syncobj(frame.value.release_syncobj_fd);
                         frame.value.release_syncobj_fd = -1;
                     }
-                    setLastError(QStringLiteral("Vulkan acquire sync import failed"));
+                    setLastError(QStringLiteral("Vulkan acquire sync import failed: %1")
+                                     .arg(describeVkImportFailure(
+                                         md_vk_importer_last_error(m_vkImporter))));
                 } else {
                     /* The producer's release object is a DRM syncobj fd, not a
                      * Vulkan opaque semaphore, so it must be signalled with
@@ -1147,7 +1273,8 @@ QSGNode* MirageDisplayItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeDat
                         if (releaseFd >= 0) {
                             (void)md_display_signal_release_syncobj(releaseFd);
                         }
-                        setLastError(QStringLiteral("Vulkan frame relay failed"));
+                        setLastError(QStringLiteral("Vulkan frame relay failed (rc=%1)")
+                                         .arg(static_cast<int>(rc)));
                     }
                 }
             }

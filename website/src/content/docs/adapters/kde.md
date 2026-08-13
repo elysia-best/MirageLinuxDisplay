@@ -64,6 +64,10 @@ kpackagetool6 -t Plasma/Wallpaper -r org.mirage.wallpaper
 - **Broker socket**：`mirage-display-v1` broker 的 Unix 域套接字路径（留空使用默认路径）。
 - **Forward pointer events**：把指针事件回传给渲染器。
 - **Show diagnostics**：显示后端、连接状态、输出与帧计数等信息。
+- **Render backend**：选择 Automatic、OpenGL 或 Vulkan。Automatic 跟随
+  plasmashell 当前场景图；指定后端时若实际 Qt Quick 后端不一致，插件会
+  停止连接并在诊断信息中提示错误。由于图形设备由 plasmashell 启动时创建，
+  切换后端需要配置对应的 plasmashell 启动环境并重启 plasmashell。
 
 ## 相关
 

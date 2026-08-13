@@ -45,6 +45,9 @@ WallpaperItem {
             item.configuredWindowStateFlags = Qt.binding(function() {
                 return windowModel.flags;
             });
+            item.configuredRendererBackend = Qt.binding(function() {
+                return root.configuration.RendererBackend;
+            });
         }
     }
 

@@ -23,12 +23,13 @@ typedef struct md_producer_callbacks {
     void (*on_output_config)(void* user_data, const md_producer_config_t* config);
     void (*on_retire_buffers)(void* user_data, uint64_t generation);
     void (*on_pointer_enter/leave/motion/button/axis)(...);
+    void (*on_window_state)(void* user_data, uint32_t flags);
     void (*on_disconnected)(void* user_data, md_result_t reason, const char* message);
     void* user_data;
 } md_producer_callbacks_t;
 ```
 
-`on_output_config` 携带协商后的 `md_producer_config_t`（物理尺寸、刷新率、变换、`(fourcc, plane_count, modifier)`）。`on_retire_buffers` 通知生产者退役指定代际。
+`on_output_config` 携带协商后的 `md_producer_config_t`（物理尺寸、刷新率、变换、`(fourcc, plane_count, modifier)`）。`on_retire_buffers` 通知生产者退役指定代际。`on_window_state` 携带桌面窗口事实位标志（`WINDOW_STATE`：0x1 遮盖、0x2 失焦、0x4 最大化、0x8 全屏），在派发线程调用，值仅对该次调用借用；渲染器可据此暂停/恢复播放。
 
 ## 连接与握手
 

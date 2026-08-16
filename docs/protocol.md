@@ -71,8 +71,11 @@ broker 对两个角色都是服务器。
 | 3 | pointer axis | 水平与垂直滚动 |
 | 4 | window state | 可上报遮盖窗口事实 |
 | 5 | color metadata | 保留给后续次版本 |
+| 6 | target GPU binding | broker 在 `OUTPUT_CONFIG` 中下发 consumer 的目标 GPU |
 
-版本 1 要求显式同步；其余特性按交集协商。
+`explicit sync` 是版本 1 的必选特性；其余特性按交集协商。v1.1 端点应在
+`HELLO` 中把 `min_minor` 与 `max_minor` 都设为 `1`，因为目标 GPU 绑定字段
+不属于 v1.0 的 `OUTPUT_CONFIG`。
 
 ## 公共握手
 
@@ -82,6 +85,7 @@ broker 对两个角色都是服务器。
 
 ```text
 u32 role
+u16 reserved (zero)
 u16 min_minor
 u16 max_minor
 u64 features
@@ -153,7 +157,8 @@ u64 modifier
 
 ## 缓冲池
 
-仅在生产者与消费者协商出兼容格式后，broker 才发送 `BIND_BUFFERS`：
+生产者与消费者协商出兼容格式、且生产者已确认目标 GPU 后，broker 才发送
+`BIND_BUFFERS`：
 
 ```text
 u64 generation
@@ -314,9 +319,43 @@ broker 按 route 缓存最近一次 `WINDOW_STATE`，转发为 producer 侧
 种类、DRM 渲染节点、设备与驱动 UUID，以及其支持的 `(fourcc, plane_count,
 modifier)` 元组。
 
-`PRODUCER_ACCEPTED` 之后，broker 发送 `OUTPUT_CONFIG`（选定范围与格式）。
-生产者分配新代际并发送 `OFFER_BUFFERS`，为每个缓冲平面附带一个 DMA-BUF
-FD；池 FD 始终归生产者所有，协议库在排队发送时复制它们。
+`PRODUCER_ACCEPTED` 之后，broker 发送 `OUTPUT_CONFIG`：
+
+```text
+u32 physical_width
+u32 physical_height
+u32 refresh_mhz
+u32 transform
+u32 fourcc
+u32 plane_count
+u64 modifier
+u32 target_drm_render_major
+u32 target_drm_render_minor
+u32 target_gpu_flags
+bytes16 target_device_uuid
+bytes16 target_driver_uuid
+```
+
+render node 标识是强制的；`target_gpu_flags` 中的
+`MD_TARGET_GPU_DEVICE_UUID_VALID` / `MD_TARGET_GPU_DRIVER_UUID_VALID` 分别表示
+对应 UUID 有效，未置位时对应的 16 字节必须为零。生产者必须先按该身份创建
+Vulkan/EGL/VA-API 资源，再发送 `PRODUCER_GPU_BOUND`，确认实际选中的 render
+node 与 UUID。broker 仅在确认相符后接受 `OFFER_BUFFERS` 和帧，故不会以格式
+协商成功为由跨 GPU 路由 DMA-BUF。
+
+`PRODUCER_GPU_BOUND` 负载为：
+
+```text
+u32 drm_render_major
+u32 drm_render_minor
+bytes16 device_uuid
+bytes16 driver_uuid
+```
+
+每次收到新的 `OUTPUT_CONFIG`，以及生产者重连后，都必须重新绑定；同一配置
+重复绑定或在绑定前发送池/帧属于协议错误。绑定成功后，生产者分配新代际并
+发送 `OFFER_BUFFERS`，为每个缓冲平面附带一个 DMA-BUF FD；池 FD 始终归生产者
+所有，协议库在排队发送时复制它们。
 
 每条 `PRODUCER_FRAME` 携带与显示端 `FRAME_READY` 相同的负载与两个同步
 FD；帧 FD 所有权转移给生产者协议库，broker 向显示端转发等价的描述符。

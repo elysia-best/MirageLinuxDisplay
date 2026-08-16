@@ -34,7 +34,11 @@ md_broker_free(b);
 
 ## 路由与协商
 
-broker 为同一稳定输出标识建立路由：一个生产者 + 多个 DE 消费者。它取格式能力交集协商 `(fourcc, plane_count, modifier)`，向生产者下发 `OUTPUT_CONFIG`，向已绑定且兼容的每个显示端转发 `BIND_BUFFERS`；多显示端时用 syncobj 扇出保证每个消费者独立释放。
+broker 为同一稳定输出标识建立路由：一个生产者 + 多个 DE 消费者。它取格式能力
+交集协商 `(fourcc, plane_count, modifier)`，并把消费者的 DRM render node（以及
+可用的设备/驱动 UUID）放入 `OUTPUT_CONFIG`。生产者发送 `PRODUCER_GPU_BOUND` 且
+身份匹配后，broker 才下发 `BIND_BUFFERS` 并接受帧；多显示端时用 syncobj 扇出
+保证每个消费者独立释放。
 
 ## 相关
 

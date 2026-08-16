@@ -5,7 +5,8 @@ description: BIND_BUFFERS、SET_CONFIG、FRAME_READY 与池替换（UNBIND/UNBIN
 
 ## 绑定缓冲池
 
-只有生产者与消费者协商出兼容格式后，broker 才会发送 `BIND_BUFFERS`：
+只有生产者与消费者协商出兼容格式、且生产者已确认 `OUTPUT_CONFIG` 中的目标
+GPU 后，broker 才会发送 `BIND_BUFFERS`：
 
 ```text
 u64 generation

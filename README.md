@@ -25,9 +25,9 @@ X11 与 Wayland 会话均受支持，但二者都通过桌面环境自有的集�
 ## 主要能力
 
 - **协议**：`mirage-display-v1` 已冻结，`protocol/mirage_display_v1.xml` 为权威定义，覆盖握手、输出注册、缓冲池绑定、帧与同步、配置、指针输入与错误处理。
-- **路由核心**（`mirage_display_broker.h`）：持有 `0600` 权限的 Unix 套接字，通过 `SO_PEERCRED` 校验同 UID 对端，按稳定的输出标识匹配一个生产者与多个 DE 消费者，协商精确的格式/修饰符组合，并转发 DMA-BUF 与同步描述符——像素数据全程留在 GPU 显存，绝不经过 broker 拷贝。
+- **路由核心**（`mirage_display_broker.h`）：持有 `0600` 权限的 Unix 套接字，通过 `SO_PEERCRED` 校验同 UID 对端，按稳定的输出标识匹配一个生产者与多个 DE 消费者，协商精确的格式/修饰符组合，并在 v1.1 中先下发消费者的 DRM render node，要求生产者确认同一 GPU 后才接受 DMA-BUF 池与帧——像素数据全程留在 GPU 显存，绝不经过 broker 拷贝。
 - **消费库**（`mirage_display.h`）：非阻塞握手、缓冲池生命周期、帧接收、显式同步、延迟解绑与指针/窗口状态上报，兼容 Qt、GObject 与 Rust FFI。
-- **生产库**（`mirage_display_producer.h`）：渲染端会话、缓冲出借、帧提交与同步对象管理。
+- **生产库**（`mirage_display_producer.h`）：渲染端会话、目标 GPU 绑定、缓冲出借、帧提交与同步对象管理。
 - **GPU 助手**：EGL（`EGL_EXT_image_dma_buf_import`）与 Vulkan（external memory FD / DRM 修饰符）导入、同设备 relay/blit 回退，以及 DRM syncobj 扇出与释放。
 - **KDE Plasma 适配器**：Qt Quick 显示项 + Plasma 壁纸包，OpenGL/EGL 与 Vulkan 双后端，支持多显示器、旋转、缩放、指针转发与窗口状态。
 
@@ -60,7 +60,7 @@ SceneWallpaper / WebWallpaper / VideoWallpaper 生产者
 | GPU 助手 | EGL / Vulkan | DMA-BUF 导入、relay/blit 回退、syncobj 扇出 |
 | KDE 适配器 | Qt Quick + Plasma 6 | 壁纸表面、双后端导入、工作区桥 |
 
-broker 只转发协议报文与文件描述符。像素数据停留在 GPU 显存，从不经过 broker 拷贝。一个 broker 提供稳定的发现、多输出路由，以及在渲染器或桌面壳层重启后的自动恢复；稳定的输出标识取代了旧的屏幕索引约定。
+broker 只转发协议报文与文件描述符。像素数据停留在 GPU 显存，从不经过 broker 拷贝；生产者必须使用 `OUTPUT_CONFIG` 指定的消费者 GPU 创建资源，并以 `PRODUCER_GPU_BOUND` 确认后才能出借缓冲。一个 broker 提供稳定的发现、多输出路由，以及在渲染器或桌面壳层重启后的自动恢复；稳定的输出标识取代了旧的屏幕索引约定。
 
 ## 目录结构
 

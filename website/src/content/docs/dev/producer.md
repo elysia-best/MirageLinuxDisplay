@@ -29,7 +29,13 @@ typedef struct md_producer_callbacks {
 } md_producer_callbacks_t;
 ```
 
-`on_output_config` 携带协商后的 `md_producer_config_t`（物理尺寸、刷新率、变换、`(fourcc, plane_count, modifier)`）。`on_retire_buffers` 通知生产者退役指定代际。`on_window_state` 携带桌面窗口事实位标志（`WINDOW_STATE`：0x1 遮盖、0x2 失焦、0x4 最大化、0x8 全屏），在派发线程调用，值仅对该次调用借用；渲染器可据此暂停/恢复播放。
+`on_output_config` 携带协商后的 `md_producer_config_t`（物理尺寸、刷新率、变换、
+`(fourcc, plane_count, modifier)` 以及目标 DRM render node、可选 GPU UUID）。
+回调返回后，生产者必须按这些字段创建 GPU 资源，并调用
+`md_producer_bind_gpu`；在此之前不能出借池或提交帧。`on_retire_buffers` 通知
+生产者退役指定代际。`on_window_state` 携带桌面窗口事实位标志（`WINDOW_STATE`：
+0x1 遮盖、0x2 失焦、0x4 最大化、0x8 全屏），在派发线程调用，值仅对该次调用
+借用；渲染器可据此暂停/恢复播放。
 
 ## 连接与握手
 
@@ -38,6 +44,7 @@ typedef struct md_producer_callbacks {
 ## 缓冲出借与帧提交
 
 ```c
+md_result_t md_producer_bind_gpu(p, &gpu);             /* 必须先于 offer_buffers */
 md_result_t md_producer_offer_buffers(p, &pool);       /* 池 FD 借用，内部复制后排队发送 */
 md_result_t md_producer_set_config(p, &config);
 md_result_t md_producer_submit_frame(p, generation, buffer_index, sequence,
@@ -46,6 +53,7 @@ md_result_t md_producer_retire_done(p, generation);
 ```
 
 - `offer_buffers` 的池 FD 是借用的，库在排队发送时复制它们；池本身始终归生产者所有。
+- `md_producer_bind_gpu` 的身份必须与最近一次 `OUTPUT_CONFIG` 一致；新的输出配置或重连后需要再次调用。
 - `submit_frame` 会**消费**两个帧 FD（包括错误路径），所有权转移给生产者协议库。
 - 没有可用释放槽时跳过该渲染帧；对退役代际的新帧会被拒绝。
 

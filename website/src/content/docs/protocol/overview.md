@@ -69,8 +69,11 @@ broker 是这两种角色的服务端。
 | 3 | pointer axis | 水平与垂直滚动 |
 | 4 | window state | 可上报遮盖窗口事实 |
 | 5 | color metadata | 保留给后续次版本 |
+| 6 | target GPU binding | broker 在 `OUTPUT_CONFIG` 中下发 consumer 的目标 GPU |
 
-版本 1 要求显式同步；其余特性按交集协商。
+`explicit sync` 是版本 1 的必选特性；其余特性按交集协商。v1.1 端点应在
+`HELLO` 中把 `min_minor` 与 `max_minor` 都设为 `1`，因为目标 GPU 绑定字段
+不属于 v1.0 的 `OUTPUT_CONFIG`。
 
 ## 相关
 

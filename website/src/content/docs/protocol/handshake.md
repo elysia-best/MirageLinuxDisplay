@@ -11,6 +11,7 @@ description: HELLO/WELCOME、显示端注册、消费能力上报与生产端注
 
 ```text
 u32 role
+u16 reserved (zero)
 u16 min_minor
 u16 max_minor
 u64 features
@@ -79,7 +80,8 @@ u64 modifier
 
 渲染端完成公共握手后发送 `REGISTER_PRODUCER`，向 broker 广播自己的稳定输出标识、渲染器类型、DRM 渲染节点、设备与驱动 UUID，以及支持的 `(fourcc, plane_count, modifier)` 元组。
 
-`PRODUCER_ACCEPTED` 之后，broker 向生产者发送 `OUTPUT_CONFIG`（选定范围与格式）：
+`PRODUCER_ACCEPTED` 之后，broker 向生产者发送带消费者 GPU 身份的
+`OUTPUT_CONFIG`：
 
 ```text
 u32 physical_width
@@ -89,7 +91,19 @@ u32 transform
 u32 fourcc
 u32 plane_count
 u64 modifier
+u32 target_drm_render_major
+u32 target_drm_render_minor
+u32 target_gpu_flags
+bytes16 target_device_uuid
+bytes16 target_driver_uuid
 ```
+
+render node 标识始终有效；`target_gpu_flags` 中的
+`MD_TARGET_GPU_DEVICE_UUID_VALID` / `MD_TARGET_GPU_DRIVER_UUID_VALID` 表示对应
+UUID 有效，未置位时对应字段必须为零。生产者应先按此身份创建 Vulkan/EGL/VA-API
+资源，再发送 `PRODUCER_GPU_BOUND`（render node、device UUID、driver UUID）。
+broker 确认身份匹配后才接受 `OFFER_BUFFERS` 与帧，避免跨 GPU 路由 DMA-BUF。
+新的 `OUTPUT_CONFIG` 会使先前的绑定失效，生产者必须为新配置重新确认 GPU。
 
 ## 协商规则
 
@@ -99,4 +113,4 @@ broker 为同一稳定输出标识建立路由，取消费者与生产者格式�
 - plane_count 取双方都支持的值；
 - 消费者上报的 `max_width` / `max_height` 约束生产者的输出尺寸。
 
-协商成功后，broker 才会进入[缓冲池绑定](/protocol/buffers/)阶段。
+协商成功后，broker 才会进入 GPU 绑定和[缓冲池绑定](/protocol/buffers/)阶段。

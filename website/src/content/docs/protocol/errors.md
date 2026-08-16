@@ -13,7 +13,10 @@ description: ERROR 报文、致命错误语义、断连清理，以及 OFFER_BUF
 
 渲染端完成公共握手后发送 `REGISTER_PRODUCER`，向 broker 广播自己的稳定输出标识、渲染器类型、DRM 渲染节点、设备与驱动 UUID，以及支持的 `(fourcc, plane_count, modifier)` 元组。
 
-`PRODUCER_ACCEPTED` 之后，broker 发送 `OUTPUT_CONFIG`（选定范围与格式）。生产者分配新代际并发送 `OFFER_BUFFERS`，为每个缓冲平面附带一个 DMA-BUF FD；池 FD 始终归生产者所有，协议库在排队发送时复制它们。
+`PRODUCER_ACCEPTED` 之后，broker 发送 `OUTPUT_CONFIG`（选定范围、格式和消费者
+目标 GPU）。生产者必须先按该 GPU 身份创建资源并发送 `PRODUCER_GPU_BOUND`；绑定
+成功后才可分配新代际并发送 `OFFER_BUFFERS`。每次收到新的 `OUTPUT_CONFIG` 或
+重连后都要重新绑定；池 FD 始终归生产者所有，协议库在排队发送时复制它们。
 
 每条 `PRODUCER_FRAME` 携带与显示端 `FRAME_READY` 相同的负载与两个同步 FD；帧 FD 的所有权转移给生产者协议库，broker 向显示端转发等价的描述符。
 

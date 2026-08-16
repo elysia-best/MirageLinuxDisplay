@@ -61,13 +61,15 @@ broker 拷贝。一个 broker 提供稳定的发现、多输出路由，以及�
 
 ## 数据流
 
-1. 显示端（DE 适配器）连接 broker，`REGISTER_OUTPUT` 注册稳定输出标识，
-   随后上报 `CONSUMER_CAPS`（格式、修饰符、UUID、输入能力）。
+1. 显示端（DE 适配器）连接 broker，`REGISTER_OUTPUT` 注册稳定输出标识和
+   DRM render node，随后上报 `CONSUMER_CAPS`（格式、修饰符、UUID、输入能力）。
 2. 渲染端连接 broker，`REGISTER_PRODUCER` 上报输出标识、DRM 渲染节点与
    支持的 `(fourcc, plane_count, modifier)` 元组。
-3. broker 为同一稳定标识建立路由，取交集协商格式，向生产者下发
-   `OUTPUT_CONFIG`。
-4. 生产者创建代际编号的缓冲池并 `OFFER_BUFFERS`（DMA-BUF FD 随报文送达）。
+3. broker 为同一稳定标识建立路由，取交集协商格式，向生产者下发带
+   消费者 GPU 身份的 `OUTPUT_CONFIG`。
+4. 生产者按 `OUTPUT_CONFIG` 创建 GPU 资源，发送 `PRODUCER_GPU_BOUND` 确认
+   render node 与 UUID；broker 确认一致后才接受代际编号缓冲池的
+   `OFFER_BUFFERS`（DMA-BUF FD 随报文送达）。
 5. broker 向已绑定且兼容的每个显示端转发 `BIND_BUFFERS`；帧提交经
    `PRODUCER_FRAME` -> `FRAME_READY` 转发，携带 acquire sync_file 与
    release syncobj，多显示端时以 syncobj 扇出保证每个消费者独立释放。

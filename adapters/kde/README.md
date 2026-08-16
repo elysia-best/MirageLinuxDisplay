@@ -27,6 +27,11 @@ Qt Quick 显示项按场景图后端自动选择导入路径：
 
 两种路径下，表面归属与输入都由 Plasma 负责。
 
+场景图初始化时，适配器从 Qt 的 EGL display 取得关联设备的 DRM render node，
+并在 `REGISTER_OUTPUT` 中上报。broker 会把该身份放进生产者的
+`OUTPUT_CONFIG`；生产者只有以同一节点创建资源并确认后，才能出借 DMA-BUF
+缓冲池。这避免 PRIME 或多 GPU 会话因格式相同而把帧路由到错误的 GPU。
+
 壁纸配置中的 **Render backend** 提供 Automatic、OpenGL、Vulkan 三档选择。
 Automatic 跟随 plasmashell 当前场景图；指定后端时，插件会严格校验实际
 Qt Quick 后端，若不一致则停止连接并在诊断信息中提示错误。Qt Quick 图形

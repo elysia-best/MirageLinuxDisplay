@@ -35,8 +35,10 @@ KDE 适配器是 Plasma 6 的 `Plasma/Wallpaper` 包，后端为 Qt Quick 模块
 | Plasma/KWin 工作区桥 | 上报遮盖、活跃、最大化与全屏窗口事实 |
 | `libmirage-display` | 协议握手、缓冲池、帧、同步 FD 与输入消息 |
 
-输出标识由 Plasma/Qt 暴露的 `QScreen` 名称、厂商、型号与序列号派生；
-几何与设备像素比来自壁纸项的 `Screen` 对象；窗口与工作区状态来自 Plasma
+输出标识由 Plasma/Qt 暴露的 `QScreen` 名称、厂商、型号与序列号派生；Qt Quick
+场景图初始化后，适配器还从 EGL device 查询并校验对应的 DRM render node，
+将该节点随 `REGISTER_OUTPUT` 上报，确保生产者不会把 DMA-BUF 创建在另一块 GPU
+上。几何与设备像素比来自壁纸项的 `Screen` 对象；窗口与工作区状态来自 Plasma
 任务模型或 KWin 工作区接口（如 `KWinWorkspaceWrapper`），绝不直接查询
 X11 窗口。
 

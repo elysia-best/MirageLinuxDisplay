@@ -16,6 +16,7 @@
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QRectF>
+#include <QFileSystemWatcher>
 #include <QSocketNotifier>
 #include <QString>
 #include <QTimer>
@@ -44,7 +45,7 @@ class MirageDisplayItem : public QQuickItem {
     QML_ELEMENT
 
     Q_PROPERTY(QString socketPath READ socketPath WRITE setSocketPath NOTIFY socketPathChanged)
-    Q_PROPERTY(QString defaultSocketPath READ defaultSocketPath CONSTANT)
+    Q_PROPERTY(QString defaultSocketPath READ defaultSocketPath NOTIFY defaultSocketPathChanged)
     Q_PROPERTY(QString outputStableId READ outputStableId WRITE setOutputStableId NOTIFY outputChanged)
     Q_PROPERTY(QString outputName READ outputName WRITE setOutputName NOTIFY outputChanged)
     Q_PROPERTY(int physicalWidth READ physicalWidth WRITE setPhysicalWidth NOTIFY outputChanged)
@@ -143,6 +144,7 @@ public:
 
 signals:
     void socketPathChanged();
+    void defaultSocketPathChanged();
     void outputChanged();
     void pointerForwardingChanged();
     void windowStateFlagsChanged();
@@ -167,6 +169,7 @@ private slots:
     void flushSocket();
     void pushOutputUpdate();
     void finishDeferredUnbind(qulonglong generation);
+    void brokerDirectoryChanged(const QString& path);
 
 private:
     struct PendingFrame {
@@ -234,6 +237,7 @@ private:
     QSocketNotifier* m_writeNotifier = nullptr;
     QTimer m_reconnectTimer;
     QTimer m_outputUpdateTimer;
+    QFileSystemWatcher m_brokerWatcher;
     QPointer<QQuickWindow> m_filteredWindow;
 
     QMutex m_stateMutex;

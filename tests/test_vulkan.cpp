@@ -160,17 +160,17 @@ static void test_real_device_format_queries(void) {
         DRM_FORMAT('X', 'R', '2', '4'),
         DRM_FORMAT('N', 'V', '1', '2'),
     };
-    for (uint32_t device = 0; device < device_count; ++device) {
+    for (uint32_t device_index = 0; device_index < device_count; ++device_index) {
         for (size_t format_index = 0; format_index < sizeof(formats) / sizeof(formats[0]);
              ++format_index) {
             uint32_t count = 0;
-            assert(md_vk_query_format_caps(devices[device], formats[format_index],
+            assert(md_vk_query_format_caps(devices[device_index], formats[format_index],
                                            VK_FORMAT_FEATURE_TRANSFER_SRC_BIT,
                                            NULL, 0, &count) == MD_OK);
             if (count == 0) continue;
             std::vector<md_format_cap_t> caps(count);
             uint32_t written = count;
-            assert(md_vk_query_format_caps(devices[device], formats[format_index],
+            assert(md_vk_query_format_caps(devices[device_index], formats[format_index],
                                            VK_FORMAT_FEATURE_TRANSFER_SRC_BIT,
                                            caps.data(), count, &written) == MD_OK);
             assert(written == count);
@@ -207,12 +207,12 @@ static void test_real_device_format_queries(void) {
             .pEnabledFeatures = NULL,
         };
         VkDevice device = VK_NULL_HANDLE;
-        if (vkCreateDevice(devices[device], &device_info, NULL, &device) != VK_SUCCESS) {
+        if (vkCreateDevice(devices[device_index], &device_info, NULL, &device) != VK_SUCCESS) {
             continue;
         }
         md_vk_dma_buf_import_state_t probe_state = MD_VK_DMA_BUF_IMPORT_UNAVAILABLE;
         char missing_extensions[256] = {};
-        assert(md_vk_query_dma_buf_import_support(devices[device], device, &probe_state,
+        assert(md_vk_query_dma_buf_import_support(devices[device_index], device, &probe_state,
                                                   missing_extensions,
                                                   sizeof(missing_extensions)) == MD_OK);
         assert(missing_extensions[0] == '\0' ||

@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <QByteArray>
 #include <QEvent>
+#include <QFileInfo>
 #include <QMouseEvent>
 #include <QMatrix4x4>
 #include <QOpenGLContext>
@@ -156,6 +157,11 @@ MirageDisplayItem::MirageDisplayItem(QQuickItem* parent): QQuickItem(parent) {
         m_socketPath = m_defaultSocketPath;
     }
 
+    connect(&m_brokerWatcher, &QFileSystemWatcher::directoryChanged,
+            this, &MirageDisplayItem::brokerDirectoryChanged);
+    if (!runtimeDirectory.isEmpty()) {
+        m_brokerWatcher.addPath(runtimeDirectory);
+    }
     m_reconnectTimer.setSingleShot(true);
     m_reconnectTimer.setInterval(2000);
     connect(&m_reconnectTimer, &QTimer::timeout, this, &MirageDisplayItem::startConnection);
@@ -191,7 +197,15 @@ void MirageDisplayItem::handleWindowChanged(QQuickWindow* quickWindow) {
         m_filteredWindow->removeEventFilter(this);
         disconnect(m_filteredWindow, nullptr, this, nullptr);
     }
-    if (quickWindow == nullptr) return;
+    if (quickWindow == nullptr) {
+        if (m_filteredWindow != nullptr) {
+            disconnect(m_filteredWindow, nullptr, this, nullptr);
+        }
+        m_reconnectTimer.stop();
+        m_brokerWatcher.removePaths(m_brokerWatcher.directories());
+        m_filteredWindow = nullptr;
+        return;
+    }
     quickWindow->installEventFilter(this);
     m_filteredWindow = quickWindow;
 
@@ -582,7 +596,11 @@ void MirageDisplayItem::invalidateRenderer() {
             finishDeferredUnbind(static_cast<qulonglong>(releaseGeneration));
         }, Qt::QueuedConnection);
     }
-    QMetaObject::invokeMethod(this, &MirageDisplayItem::closeConnection, Qt::QueuedConnection);
+    /* Renderer readiness is restored by the next sceneGraphInitialized signal;
+     * scheduleReconnect() cannot run while the renderer is invalid. */
+    QMetaObject::invokeMethod(this, [this]() {
+        closeConnection();
+    }, Qt::QueuedConnection);
 }
 
 void MirageDisplayItem::setSocketPath(const QString& value) {
@@ -591,6 +609,21 @@ void MirageDisplayItem::setSocketPath(const QString& value) {
     emit socketPathChanged();
     closeConnection();
     scheduleReconnect();
+}
+
+/* Re-attempts immediately when the runtime broker directory changes; the
+ * reconnect timer remains the fallback when inotify cannot observe it. */
+void MirageDisplayItem::brokerDirectoryChanged(const QString& path) {
+    if (m_socketPath.isEmpty()) return;
+    const QString brokerDirectory = QFileInfo(m_socketPath).absolutePath();
+    if (path == brokerDirectory || path == QFileInfo(brokerDirectory).absolutePath()) {
+        if (QFileInfo::exists(brokerDirectory) &&
+            !m_brokerWatcher.directories().contains(brokerDirectory)) {
+            const bool watching = m_brokerWatcher.addPath(brokerDirectory);
+            if (!watching) scheduleReconnect();
+        }
+        startConnection();
+    }
 }
 
 /*
@@ -782,9 +815,31 @@ md_output_info_t MirageDisplayItem::makeOutputInfo(QByteArray& stableId, QByteAr
  * handshake.  Any failure closes the session and schedules a reconnect.
  */
 void MirageDisplayItem::startConnection() {
-    if (!isComponentComplete() || !m_rendererReady.load() || m_display != nullptr ||
-        m_socketPath.isEmpty()) {
+    if (!isComponentComplete() || !m_rendererReady.load() || m_display != nullptr) {
         return;
+    }
+    if (m_socketPath.isEmpty()) {
+        const QString runtimeDirectory = qEnvironmentVariable("XDG_RUNTIME_DIR");
+        if (!runtimeDirectory.isEmpty()) {
+            const QString nextDefaultPath = runtimeDirectory +
+                                            QStringLiteral("/mirage-wallpaper/display-v1.sock");
+            if (m_defaultSocketPath != nextDefaultPath) {
+                m_defaultSocketPath = nextDefaultPath;
+                emit defaultSocketPathChanged();
+            }
+            m_socketPath = m_defaultSocketPath;
+            emit socketPathChanged();
+        }
+    }
+    if (m_socketPath.isEmpty()) {
+        scheduleReconnect();
+        return;
+    }
+    const QString brokerDirectory = QFileInfo(m_socketPath).absolutePath();
+    if (QFileInfo::exists(brokerDirectory) &&
+        !m_brokerWatcher.directories().contains(brokerDirectory)) {
+        const bool watching = m_brokerWatcher.addPath(brokerDirectory);
+        if (!watching) scheduleReconnect();
     }
 
     md_display_callbacks_t callbacks {
@@ -852,6 +907,8 @@ void MirageDisplayItem::startConnection() {
                                           &output, &capabilities);
     if (result != MD_OK) {
         setLastError(QStringLiteral("Cannot connect to Mirage display broker"));
+        // Some begin_connect() failures occur before the transport can notify
+        // onDisconnected(); clean up here so every failed attempt can retry.
         closeConnection();
         scheduleReconnect();
         return;
@@ -1010,6 +1067,7 @@ void MirageDisplayItem::scheduleReconnect() {
  */
 void MirageDisplayItem::onConnected(void* userData, uint64_t outputIdValue) {
     auto* self = static_cast<MirageDisplayItem*>(userData);
+    self->m_reconnectTimer.stop();
     self->m_connected = true;
     self->m_outputId = static_cast<qulonglong>(outputIdValue);
     self->setLastError({});

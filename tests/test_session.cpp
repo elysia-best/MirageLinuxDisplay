@@ -281,6 +281,22 @@ int main(void) {
     caps.formats = &format;
     caps.format_count = 1U;
 
+    /* An absent broker must report one synchronous disconnect notification and
+     * leave the caller free to create a fresh session for the next retry. */
+    char absent_socket[108];
+    const int absent_length = snprintf(absent_socket, sizeof(absent_socket),
+                                       "/tmp/mirage-display-test-%ld.sock",
+                                       static_cast<long>(getpid()));
+    assert(absent_length > 0 && static_cast<size_t>(absent_length) < sizeof(absent_socket));
+    md_display_t* absent_display = md_display_new(&callbacks);
+    assert(absent_display != NULL);
+    const unsigned disconnected_before = observer.disconnected;
+    assert(md_display_begin_connect(absent_display, absent_socket, "test-client", "0.2",
+                                    &output, &caps) == MD_ERR_IO);
+    assert(observer.disconnected == disconnected_before + 1U);
+    assert(md_display_connection_state(absent_display) == MD_CONNECTION_DEAD);
+    md_display_free(absent_display);
+
     md_result_t begin_rc = md_display_begin_connected_fd(display, broker.client_fd,
                                                           "test-client", "0.2",
                                                           &output, &caps);
@@ -321,7 +337,7 @@ int main(void) {
     assert(observer.configs == 1);
     assert(observer.frames == 1);
     assert(observer.buffers_releasing == 1);
-    assert(observer.disconnected == 0);
+    assert(observer.disconnected == 1);
     assert(md_display_pending_unbind_generation(display) == 7);
     assert(md_display_finish_unbind(display, 8) == MD_ERR_STATE);
     assert(md_display_finish_unbind(display, 7) == MD_OK);

@@ -37,6 +37,14 @@ mirage_add_test(test_broker TEST_NAME broker SOURCES test_broker.cpp
 set_tests_properties(broker PROPERTIES SKIP_RETURN_CODE 77)
 mirage_add_test(test_producer SOURCES test_producer.cpp LINKS mirage_display_static Threads::Threads
     INCLUDES ${PROJECT_SOURCE_DIR}/src)
+# Pathname-socket endpoint lifecycle: the broker replaces the socket inode on
+# listen, and the KDE adapter must notice instead of retrying a dead endpoint.
+# Skips (77) where the sandbox cannot bind pathname sockets.
+mirage_add_test(test_endpoint_replace TEST_NAME endpoint_replace
+    SOURCES test_endpoint_replace.cpp
+    LINKS mirage_display_static Threads::Threads
+    INCLUDES ${PROJECT_SOURCE_DIR}/src)
+set_tests_properties(endpoint_replace PROPERTIES SKIP_RETURN_CODE 77)
 mirage_add_test(test_sync SOURCES test_sync.cpp LINKS mirage_display_static
     INCLUDES ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/src/common)
 if(MIRAGE_DISPLAY_WITH_VULKAN)

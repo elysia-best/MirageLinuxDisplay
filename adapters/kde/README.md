@@ -27,6 +27,11 @@ Qt Quick 显示项按场景图后端自动选择导入路径：
 
 两种路径下，表面归属与输入都由 Plasma 负责。
 
+适配器对 broker 启动竞态采用非阻塞连接：握手超过 5 秒会主动丢弃并重试，
+场景图初始化失败也会退避重试；broker 重建 Unix socket 时通过目录监视和
+设备/inode 变化立即建立新会话。因此启动期间显示 `disconnected` 不会把
+Plasma 壁纸项永久留在失效会话上，broker 随后启动即可自动恢复。
+
 场景图初始化时，适配器从 Qt 的 EGL display 取得关联设备的 DRM render node，
 并在 `REGISTER_OUTPUT` 中上报。broker 会把该身份放进生产者的
 `OUTPUT_CONFIG`；生产者只有以同一节点创建资源并确认后，才能出借 DMA-BUF

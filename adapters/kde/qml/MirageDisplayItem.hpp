@@ -63,6 +63,8 @@ class MirageDisplayItem : public QQuickItem {
     Q_PROPERTY(QColor clearColor READ clearColor NOTIFY clearColorChanged)
     Q_PROPERTY(RendererBackend rendererBackend READ rendererBackend NOTIFY rendererBackendChanged)
     Q_PROPERTY(QString lastError READ lastError NOTIFY lastErrorChanged)
+    Q_PROPERTY(qulonglong reconnectAttempts READ reconnectAttempts NOTIFY connectionDiagnosticsChanged)
+    Q_PROPERTY(qulonglong socketInode READ socketInode NOTIFY connectionDiagnosticsChanged)
     Q_PROPERTY(qulonglong importedGeneration READ importedGeneration NOTIFY importedGenerationChanged)
     Q_PROPERTY(RendererBackendPreference rendererBackendPreference READ rendererBackendPreference
                WRITE setRendererBackendPreference NOTIFY rendererBackendPreferenceChanged)
@@ -136,6 +138,8 @@ public:
     RendererBackendPreference rendererBackendPreference() const { return m_rendererBackendPreference; }
     void setRendererBackendPreference(RendererBackendPreference value);
     QString lastError() const { return m_lastError; }
+    qulonglong reconnectAttempts() const { return m_reconnectAttempts; }
+    qulonglong socketInode() const { return m_socketInode; }
     qulonglong importedGeneration() const {
         return static_cast<qulonglong>(m_importedGeneration.load());
     }
@@ -155,6 +159,7 @@ signals:
     void rendererBackendChanged();
     void rendererBackendPreferenceChanged();
     void lastErrorChanged();
+    void connectionDiagnosticsChanged();
     void importedGenerationChanged();
 
 protected:
@@ -165,6 +170,7 @@ private slots:
     void handleWindowChanged(QQuickWindow* window);
     void startConnection();
     void advanceHandshake();
+    void abortStalledHandshake();
     void dispatchSocket();
     void flushSocket();
     void pushOutputUpdate();
@@ -187,6 +193,7 @@ private:
     static void onDisconnected(void* userData, md_result_t reason, const char* message);
 
     void initializeRenderer();
+    void scheduleRendererRetry();
     void invalidateRenderer();
     bool initializeOpenGLRenderer();
 #ifdef MIRAGE_DISPLAY_QML_WITH_VULKAN
@@ -196,6 +203,7 @@ private:
     void releaseRenderPool();
     void releaseAfterRendering();
     void closeConnection();
+    bool refreshSocketIdentity();
     void handleConnectionFailure();
     void armWritable();
     void scheduleReconnect();
@@ -235,8 +243,18 @@ private:
     md_display_t* m_display = nullptr;
     QSocketNotifier* m_readNotifier = nullptr;
     QSocketNotifier* m_writeNotifier = nullptr;
+    /* Incremented for every session created by startConnection(). A queued
+     * teardown from onDisconnected() carries the generation it observed so it
+     * can never close a session that was created after it was scheduled. */
+    quint64 m_connectionGeneration = 0;
+    qulonglong m_reconnectAttempts = 0;
+    qulonglong m_socketDevice = 0;
+    qulonglong m_socketInode = 0;
     QTimer m_reconnectTimer;
     QTimer m_outputUpdateTimer;
+    QTimer m_rendererRetryTimer;
+    QTimer m_handshakeTimeoutTimer;
+    int m_rendererRetryAttempts = 0;
     QFileSystemWatcher m_brokerWatcher;
     QPointer<QQuickWindow> m_filteredWindow;
 

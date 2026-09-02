@@ -40,6 +40,14 @@ broker 为同一稳定输出标识建立路由：一个生产者 + 多个 DE 消
 身份匹配后，broker 才下发 `BIND_BUFFERS` 并接受帧；多显示端时用 syncobj 扇出
 保证每个消费者独立释放。
 
+### 输出生命周期回调
+
+`md_broker_options_t` 提供 `on_output_added`、`on_output_updated` 和
+`on_output_removed` 三个可选回调。它们分别对应首个消费者注册、逻辑几何或
+显示参数变化、以及最后一个消费者断开。回调只在 broker 派发线程触发；
+`md_output_info_t` 及其字符串是借用数据，不能在回调返回后继续保存。需要更新
+Qt 等主线程模型时，应在回调中复制字段，再通过队列信号传递。
+
 ## 相关
 
 - [架构总览](/guides/architecture/)

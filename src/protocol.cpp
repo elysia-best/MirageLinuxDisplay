@@ -150,6 +150,10 @@ std::int32_t md_write_u32(md_writer_t* const writer, const std::uint32_t value) 
     return 0;
 }
 
+std::int32_t md_write_i32(md_writer_t* const writer, const std::int32_t value) {
+    return md_write_u32(writer, static_cast<std::uint32_t>(value));
+}
+
 std::int32_t md_write_u64(md_writer_t* const writer, const std::uint64_t value) {
     const std::int32_t result = reserve(writer, 8U);
     if (result != 0) {
@@ -236,6 +240,14 @@ std::int32_t md_read_u32(md_reader_t* const reader, std::uint32_t* const value) 
     return 0;
 }
 
+std::int32_t md_read_i32(md_reader_t* const reader, std::int32_t* const value) {
+    std::uint32_t bits = 0U;
+    const std::int32_t result = md_read_u32(reader, &bits);
+    if (value == nullptr || result != 0) return -EPROTO;
+    *value = static_cast<std::int32_t>(bits);
+    return 0;
+}
+
 std::int32_t md_read_u64(md_reader_t* const reader, std::uint64_t* const value) {
     const std::uint8_t* data = nullptr;
     if (value == nullptr || take(reader, 8U, &data) != 0) {
@@ -313,7 +325,8 @@ std::int32_t md_proto_encode_hello(md_writer_t* const writer, const std::uint32_
     }
     std::int32_t result = md_write_u32(writer, role);
     if (result != 0) return result;
-    /* v1.1 target-GPU binding is mandatory for project endpoints. Do not
+    /* v1.2 target-GPU binding and logical desktop coordinates are mandatory.
+     * Do not
      * negotiate v1.0, whose OUTPUT_CONFIG has no consumer GPU identity. */
     result = md_write_u16(writer, 0U);
     if (result != 0) return result;
@@ -345,6 +358,10 @@ std::int32_t md_proto_encode_register_output(md_writer_t* const writer,
     if (result != 0) return result;
     result = md_write_u32(writer, output->logical_height);
     if (result != 0) return result;
+    result = md_write_i32(writer, output->logical_x);
+    if (result != 0) return result;
+    result = md_write_i32(writer, output->logical_y);
+    if (result != 0) return result;
     result = md_write_u32(writer, output->scale_120);
     if (result != 0) return result;
     result = md_write_u32(writer, output->refresh_mhz);
@@ -370,6 +387,10 @@ std::int32_t md_proto_encode_update_output(md_writer_t* const writer,
     result = md_write_u32(writer, output->logical_width);
     if (result != 0) return result;
     result = md_write_u32(writer, output->logical_height);
+    if (result != 0) return result;
+    result = md_write_i32(writer, output->logical_x);
+    if (result != 0) return result;
+    result = md_write_i32(writer, output->logical_y);
     if (result != 0) return result;
     result = md_write_u32(writer, output->scale_120);
     if (result != 0) return result;

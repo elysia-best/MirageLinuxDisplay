@@ -5,7 +5,7 @@ description: MirageLinuxDisplay 的目标架构、模块划分、数据流与协
 
 ## 目标与边界
 
-核心实现使用 C++20 的资源所有权与容器设施，但安装的头文件保持 C ABI。公共 DTO 采用显式八字节布局，跨边界的 FD、超时与状态计数一律使用定宽类型；协议版本仍是 `mirage-display-v1`，不会因实现语言迁移而改变线上消息格式。
+核心实现使用 C++20 的资源所有权与容器设施，但安装的头文件保持 C ABI。公共 DTO 采用显式八字节布局，跨边界的 FD、超时与状态计数一律使用定宽类型；线上协议为 `mirage-display-v1.2`，不会因实现语言迁移而改变消息格式，旧 v1.1 端点会被拒绝。
 
 MirageWallpaper 的 Linux 版本由"直接占有 X11 桌面"改为"协议驱动的离屏渲染"：渲染器导出 DMA-BUF 帧，桌面环境集成负责在 DE 自有的壁纸表面上显示，并把指针输入回传给渲染器。
 
@@ -55,7 +55,7 @@ broker 只转发协议报文与文件描述符。像素数据留在 GPU 显存�
 
 ## 数据流
 
-1. 显示端（DE 适配器）连接 broker，用 `REGISTER_OUTPUT` 注册稳定输出标识和 DRM render node，随后上报 `CONSUMER_CAPS`（格式、修饰符、UUID、输入能力）。
+1. 显示端（DE 适配器）连接 broker，用 `REGISTER_OUTPUT` 注册稳定输出标识、逻辑桌面坐标和 DRM render node，随后上报 `CONSUMER_CAPS`（格式、修饰符、UUID、输入能力）。
 2. 渲染端连接 broker，用 `REGISTER_PRODUCER` 上报输出标识、DRM 渲染节点与支持的 `(fourcc, plane_count, modifier)` 元组。
 3. broker 为同一稳定标识建立路由，取格式交集协商，向生产者下发带消费者 GPU 身份的 `OUTPUT_CONFIG`。
 4. 生产者按 `OUTPUT_CONFIG` 创建 GPU 资源，发送 `PRODUCER_GPU_BOUND` 确认身份；broker 确认一致后才接受带代际编号的 `OFFER_BUFFERS`（DMA-BUF FD 随报文送达）。

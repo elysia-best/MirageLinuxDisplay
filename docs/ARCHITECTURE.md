@@ -3,8 +3,8 @@
 ## 目标与边界
 
 实现代码使用 C++20 的资源所有权和容器设施，但安装的头文件保持 C ABI。
-公共 DTO 采用显式八字节布局，跨边界 FD、超时和状态计数使用定宽类型；协议
-版本仍为 `mirage-display-v1`，不因实现语言迁移而改变线上消息格式。
+公共 DTO 采用显式八字节布局，跨边界 FD、超时和状态计数使用定宽类型；线上协议
+为 `mirage-display-v1.2`，不因实现语言迁移而改变消息格式，旧 v1.1 端点不会被接受。
 
 MirageWallpaper 的 Linux 版本由"直接占有 X11 桌面"改为"协议驱动的离屏
 渲染"：渲染器导出 DMA-BUF 帧，桌面环境集成负责在 DE 自有的壁纸表面上显示，
@@ -61,8 +61,10 @@ broker 拷贝。一个 broker 提供稳定的发现、多输出路由，以及�
 
 ## 数据流
 
-1. 显示端（DE 适配器）连接 broker，`REGISTER_OUTPUT` 注册稳定输出标识和
-   DRM render node，随后上报 `CONSUMER_CAPS`（格式、修饰符、UUID、输入能力）。
+1. 显示端（DE 适配器）连接 broker，`REGISTER_OUTPUT` 注册稳定输出标识、逻辑
+   桌面坐标和 DRM render node，随后上报 `CONSUMER_CAPS`（格式、修饰符、UUID、
+   输入能力）。首个显示消费者触发 output added 回调；几何变化触发 output
+   updated 回调；最后一个显示消费者断开触发 output removed 回调。
 2. 渲染端连接 broker，`REGISTER_PRODUCER` 上报输出标识、DRM 渲染节点与
    支持的 `(fourcc, plane_count, modifier)` 元组。
 3. broker 为同一稳定标识建立路由，取交集协商格式，向生产者下发带

@@ -135,6 +135,9 @@ static md_broker_t* start_broker(const char* socket_path, broker_thread_t* threa
         .features = MD_FEATURE_EXPLICIT_SYNC | MD_FEATURE_POINTER_AXIS |
                     MD_FEATURE_WINDOW_STATE,
         .max_routes = 4,
+        .on_output_added = nullptr,
+        .on_output_updated = nullptr,
+        .on_output_removed = nullptr,
         .on_window_state = nullptr,
         .user_data = nullptr,
     };

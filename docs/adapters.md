@@ -38,9 +38,10 @@ KDE 适配器是 Plasma 6 的 `Plasma/Wallpaper` 包，后端为 Qt Quick 模块
 输出标识由 Plasma/Qt 暴露的 `QScreen` 名称、厂商、型号与序列号派生；Qt Quick
 场景图初始化后，适配器还从 EGL device 查询并校验对应的 DRM render node，
 将该节点随 `REGISTER_OUTPUT` 上报，确保生产者不会把 DMA-BUF 创建在另一块 GPU
-上。几何与设备像素比来自壁纸项的 `Screen` 对象；窗口与工作区状态来自 Plasma
-任务模型或 KWin 工作区接口（如 `KWinWorkspaceWrapper`），绝不直接查询
-X11 窗口。
+上。逻辑宽高以及 `Screen.geometry` 的 `x/y` 虚拟桌面坐标也会随 v1.2 上报；
+坐标可以为负数，不能用显示器枚举索引代替。几何与设备像素比来自壁纸项的
+`Screen` 对象；窗口与工作区状态来自 Plasma 任务模型或 KWin 工作区接口（如
+`KWinWorkspaceWrapper`），绝不直接查询 X11 窗口。
 
 Qt Quick 显示项同时支持 **OpenGL/EGL** 与 **Vulkan** 两条导入路径：
 - EGL 路径使用 `EGL_EXT_image_dma_buf_import` 与原生 fence 同步；

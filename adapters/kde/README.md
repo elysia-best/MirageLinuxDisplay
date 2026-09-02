@@ -36,6 +36,8 @@ Plasma 壁纸项永久留在失效会话上，broker 随后启动即可自动恢
 并在 `REGISTER_OUTPUT` 中上报。broker 会把该身份放进生产者的
 `OUTPUT_CONFIG`；生产者只有以同一节点创建资源并确认后，才能出借 DMA-BUF
 缓冲池。这避免 PRIME 或多 GPU 会话因格式相同而把帧路由到错误的 GPU。
+输出的逻辑宽高以及 `Screen.geometry.x/y` 虚拟桌面坐标会随 v1.2 注册；坐标可为
+负数，因此不能用显示器枚举索引代替稳定输出标识。
 
 壁纸配置中的 **Render backend** 提供 Automatic、OpenGL、Vulkan 三档选择。
 Automatic 跟随 plasmashell 当前场景图；指定后端时，插件会严格校验实际

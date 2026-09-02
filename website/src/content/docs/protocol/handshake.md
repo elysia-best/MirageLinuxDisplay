@@ -42,6 +42,8 @@ u32 physical_width
 u32 physical_height
 u32 logical_width
 u32 logical_height
+i32 logical_x
+i32 logical_y
 u32 scale_120
 u32 refresh_mhz
 u32 transform
@@ -50,7 +52,9 @@ u32 drm_render_minor
 u64 input_caps
 ```
 
-`scale_120` 表示逻辑缩放系数乘以 120；`transform` 使用 `wl_output.transform` 的数值 0–7。
+`logical_x` 与 `logical_y` 是虚拟桌面中的逻辑坐标，采用小端有符号 32 位整数，
+单位为逻辑桌面像素，允许负数。`scale_120` 表示逻辑缩放系数乘以 120；
+`transform` 使用 `wl_output.transform` 的数值 0–7。
 
 broker 回复 `OUTPUT_ACCEPTED { u64 output_id }`。显示端随后发送 `CONSUMER_CAPS`：
 
@@ -74,7 +78,27 @@ u64 modifier
 
 至多允许 256 个格式能力。
 
-显示端可以通过 `UPDATE_OUTPUT` 在会话中更新几何信息（物理/逻辑尺寸、`scale_120`、刷新率、变换），broker 据此决定是否重新协商 `OUTPUT_CONFIG`。
+显示端可以通过 `UPDATE_OUTPUT` 在会话中更新几何信息（物理/逻辑尺寸、逻辑坐标、
+`scale_120`、刷新率、变换），broker 据此决定是否重新协商 `OUTPUT_CONFIG`。
+
+`UPDATE_OUTPUT` 的负载顺序为：
+
+```text
+u32 physical_width
+u32 physical_height
+u32 logical_width
+u32 logical_height
+i32 logical_x
+i32 logical_y
+u32 scale_120
+u32 refresh_mhz
+u32 transform
+```
+
+broker 按 `stable_id` 管理输出。首个显示消费者注册时触发 `on_output_added`，
+几何字段发生变化时触发 `on_output_updated`，最后一个显示消费者断开时触发
+`on_output_removed`。这些回调运行在 broker 派发线程；输出结构体和字符串仅在
+回调期间有效，宿主跨线程使用前必须复制。
 
 ## 生产端注册
 

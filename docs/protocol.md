@@ -1,6 +1,6 @@
-# mirage-display-v1 线上协议
+# mirage-display-v1.2 线上协议
 
-状态：首个实现已冻结。
+状态：v1.2 已冻结。broker 与所有适配器必须精确协商 v1.2；v1.1 端点会被拒绝，不提供降级连接。
 
 ## 传输
 
@@ -73,9 +73,9 @@ broker 对两个角色都是服务器。
 | 5 | color metadata | 保留给后续次版本 |
 | 6 | target GPU binding | broker 在 `OUTPUT_CONFIG` 中下发 consumer 的目标 GPU |
 
-`explicit sync` 是版本 1 的必选特性；其余特性按交集协商。v1.1 端点应在
-`HELLO` 中把 `min_minor` 与 `max_minor` 都设为 `1`，因为目标 GPU 绑定字段
-不属于 v1.0 的 `OUTPUT_CONFIG`。
+`explicit sync` 是版本 1 的必选特性；其余特性按交集协商。v1.2 端点必须在
+`HELLO` 中把 `min_minor` 与 `max_minor` 都设为 `2`。当前实现不接受范围协商，
+也不为 v1.1 或更早版本提供兼容分支。
 
 ## 公共握手
 
@@ -117,6 +117,8 @@ u32 physical_width
 u32 physical_height
 u32 logical_width
 u32 logical_height
+i32 logical_x
+i32 logical_y
 u32 scale_120
 u32 refresh_mhz
 u32 transform
@@ -125,8 +127,10 @@ u32 drm_render_minor
 u64 input_caps
 ```
 
-`scale_120` 以每逻辑缩放系数 120 为单位；`transform` 使用 `wl_output.transform`
-的数值 0–7。
+`logical_x` 与 `logical_y` 是逻辑桌面坐标，使用小端有符号 32 位整数，单位为
+逻辑桌面像素，可以为负数。它们表示输出矩形左上角在虚拟桌面中的位置；宽高仍
+使用 `u32`。`scale_120` 以每逻辑缩放系数 120 为单位；`transform` 使用
+`wl_output.transform` 的数值 0–7。
 
 broker 回复 `OUTPUT_ACCEPTED { u64 output_id }`。显示端随后发送
 `CONSUMER_CAPS`：
@@ -151,9 +155,33 @@ u64 modifier
 
 至多允许 256 个格式能力。
 
-显示端可通过 `UPDATE_OUTPUT` 在会话中更新几何信息（物理/逻辑尺寸、
+显示端可通过 `UPDATE_OUTPUT` 在会话中更新几何信息（物理/逻辑尺寸、逻辑坐标、
 `scale_120`、刷新率、变换），broker 据此决定是否重新协商
 `OUTPUT_CONFIG`。
+
+`UPDATE_OUTPUT` 的负载顺序为：
+
+```text
+u32 physical_width
+u32 physical_height
+u32 logical_width
+u32 logical_height
+i32 logical_x
+i32 logical_y
+u32 scale_120
+u32 refresh_mhz
+u32 transform
+```
+
+## 输出生命周期
+
+broker 按 `stable_id` 管理输出路由，而不是按连接顺序或屏幕整数索引管理。
+同一稳定标识的首个显示消费者完成注册后触发 `on_output_added`；已注册显示端
+通过 `UPDATE_OUTPUT` 改变尺寸、坐标、缩放、刷新率或变换时触发
+`on_output_updated`；该稳定标识的最后一个显示消费者断开时触发
+`on_output_removed`。这些 `md_broker_options_t` 回调只在 broker 派发线程执行，
+输出结构体及其中的字符串仅在回调期间借用；跨线程的宿主必须在回调返回前复制
+全部字段。
 
 ## 缓冲池
 

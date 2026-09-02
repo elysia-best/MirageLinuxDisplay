@@ -5,6 +5,10 @@
 MirageWallpaper 渲染器的 DMA-BUF 帧，并把指针与窗口状态回传给渲染器，
 X11 与 Wayland 会话行为一致。
 
+该壁纸包使用 `mirage-display-v1.2`。每个 Plasma 屏幕都会注册稳定输出标识、
+逻辑尺寸和虚拟桌面坐标；位于主屏左侧或上方的屏幕可以使用负坐标。v1.1
+端点不会被当前 broker 接受。
+
 ## 安装
 
 本 ZIP 即标准 KPackage 布局（`metadata.json` 位于压缩包根目录），并且是
